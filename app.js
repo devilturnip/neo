@@ -7944,13 +7944,29 @@ $('#nav-pane').addEventListener('dragleave', (e) => {
 // hovering the right edge. Registered before wireHoverPane's own listener so
 // the mode (and the aria-label) is set before .open paints the pane open.
 let trackerPaneOpenedAt = 0;
-$('#side-hotzone').addEventListener('mouseenter', (e) => {
-  if (e.buttons) return; // dragging something — stand down, same guard wireHoverPane uses
+// Set for the duration of the right-click "Add to the tracker" flow (further
+// down) — while true, the mousemove listener below never closes the pane,
+// since that flow's own pop-menus render at the click position (usually out
+// in the manuscript, not over the pane) and the cursor never has to be over
+// the pane just to pick a character. Cleared the moment the cursor is
+// actually seen inside the pane (the user looking at the dialog that just
+// opened), which hands auto-close back to normal; a deliberate click
+// elsewhere still closes it regardless (see the mousedown listener below).
+let trackerFlowActive = false;
+// Shared by the hover gesture below and the right-click "Add to the
+// tracker" menu (further down) — either one puts the pane in tracker mode
+// and gets the dev server starting, without waiting on it.
+function openTrackerPane() {
   const pane = $('#side-pane');
   pane.dataset.mode = 'tracker';
   pane.setAttribute('aria-label', t('litrpg-tracker'));
+  pane.classList.add('open');
   trackerPaneOpenedAt = Date.now(); // the slide-in transition takes 0.18s — see the mousemove listener below
-  ensureTrackerPane();
+  return ensureTrackerPane();
+}
+$('#side-hotzone').addEventListener('mouseenter', (e) => {
+  if (e.buttons) return; // dragging something — stand down, same guard wireHoverPane uses
+  openTrackerPane();
 });
 wireHoverPane($('#side-hotzone'), $('#side-pane'), true);
 // leaving the window closes unpinned panes (they used to stick open)
@@ -8004,6 +8020,29 @@ if (!NO_HOVER) {
   } catch { /* nothing kept */ }
 }
 
+// "Full screen" for the tracker: an overlay you step into and back out of
+// (see the CSS comment on [data-wide="1"]) — unlike pinPane above, this
+// never forces the pane open on its own; it only changes how big the pane
+// gets while something else (hover, pin, the right-click flow) has it open.
+function setTrackerWide(on) {
+  const pane = $('#side-pane');
+  pane.dataset.wide = on ? '1' : '0';
+  $('#side-wide').classList.toggle('on', on);
+  $('#side-wide').setAttribute('aria-pressed', on ? 'true' : 'false');
+  try {
+    const kept = JSON.parse(localStorage.getItem('neo-pinned-panes') || '{}');
+    kept.trackerWide = on;
+    localStorage.setItem('neo-pinned-panes', JSON.stringify(kept));
+  } catch { /* fine: it just won't be remembered */ }
+}
+$('#side-wide').onclick = () => setTrackerWide($('#side-pane').dataset.wide !== '1');
+if (!NO_HOVER) {
+  try {
+    const kept = JSON.parse(localStorage.getItem('neo-pinned-panes') || '{}');
+    if (kept.trackerWide) setTrackerWide(true);
+  } catch { /* nothing kept */ }
+}
+
 // The side pane (Notes & Comments) opens from this bottombar button instead
 // of a right-edge hover, so the right edge is free for other things.
 function openSidePane() {
@@ -8033,6 +8072,12 @@ document.addEventListener('mousedown', (e) => {
   if (!pane.classList.contains('open') || pane.dataset.pinned === '1') return;
   if ($('#editor-view').classList.contains('darlings-tab')) return; // snapshots stay
   if (pane.contains(e.target) || e.target.closest('#side-pane-toggle')) return;
+  // a pop-menu (e.g. the right-click "Add to the tracker" action/character
+  // pickers) renders at document.body, not inside #side-pane, at whatever
+  // position the triggering click happened — so picking an item in one
+  // reads as "clicked outside the pane" here and would otherwise close it
+  // out from under the flow this click is part of.
+  if (e.target.closest('.pop-menu')) return;
   closeSidePane();
 }, true);
 
@@ -8118,7 +8163,138 @@ document.addEventListener('mousemove', (e) => {
   if (Date.now() - trackerPaneOpenedAt < 250) return;
   const r = pane.getBoundingClientRect();
   const inside = e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom;
+  if (trackerFlowActive) {
+    if (inside) trackerFlowActive = false; // genuinely engaging with it now — resume normal tracking
+    return; // never auto-close mid-flow (or just after) purely from cursor position
+  }
   if (!inside) pane.classList.remove('open');
+});
+
+// Posts a one-shot "create this" request for the tracker's own polling to
+// pick up (see notifyTrackerOfChapter above for why this goes through the
+// dev server rather than the iframe directly — the same reasoning applies
+// here, and no-cors/query-string is the same shape for the same reason).
+async function sendTrackerIntent(type, text, owner) {
+  const url = trackerReadyUrl + '__neo-intent?type=' + encodeURIComponent(type)
+    + '&text=' + encodeURIComponent(text) + (owner ? '&owner=' + encodeURIComponent(owner) : '');
+  await fetch(url, { method: 'POST', mode: 'no-cors' }).catch(() => {});
+}
+
+// Jumping to a log entry's spot in the manuscript: the reverse of the two
+// functions above — everything else in this file pushes to the tracker's
+// dev server, but a log row's jump icon writes a pending request there
+// instead, for NEO to pick up. Nothing here has ever polled the tracker
+// before, so this is a new loop, at the same 1s cadence the tracker's own
+// App.tsx already polls NEO's pushes with. A no-op whenever the pane hasn't
+// been opened yet this session (trackerReadyUrl unset) or there's nothing
+// pending — cheap enough to just always be running, like the dev server
+// probe above.
+setInterval(() => { void checkTrackerGoto(); }, 1000);
+async function checkTrackerGoto() {
+  if (!trackerReadyUrl) return;
+  let body;
+  try { body = await (await fetch(trackerReadyUrl + '__tracker-goto')).json(); } catch { return; }
+  const g = body && body.goto;
+  if (!g || typeof g.chapter !== 'number') return;
+  jumpToTrackerGoto(g.chapter, g.quote);
+}
+
+// The reverse of chapterNumber() above: which chapter in the open book has
+// this number, if any.
+function chapterIdForNumber(n) {
+  if (!book) return null;
+  return book.chapterOrder.find((chId) => chapterNumber(chId) === n) || null;
+}
+
+function jumpToTrackerGoto(n, quote) {
+  const chId = chapterIdForNumber(n);
+  if (!chId) { toast(t("Chapter not found in the open manuscript.")); return; }
+  // so the manuscript being jumped to is actually visible, not sitting
+  // behind/beside the panel the request just came from
+  closeSidePane();
+  goToChapterTop(chId);
+  if (!quote) return;
+  const body = document.querySelector(`.chapter[data-id="${chId}"] .chapter-body`);
+  if (!body) return;
+  // tracker quotes are wrapped '…' — strip that pair back off before
+  // searching, matching the convention its own note-writing side uses
+  const clean = quote.replace(/^['"‘’“”]/, '').replace(/['"‘’“”]$/, '');
+  if (!clean) return;
+  // same text-position machinery darlings use to relocate a cut by its
+  // surrounding text (see bodyPlainText/textPosToRange below), just walked
+  // to find a literal match instead of restoring at a remembered offset.
+  // Case-insensitive, matching findRanges' own convention (Find & Replace) —
+  // a quote's case shouldn't be the reason it can't be found.
+  const text = bodyPlainText(body);
+  const idx = text.toLowerCase().indexOf(clean.toLowerCase());
+  if (idx === -1) {
+    toast(t("Landed on the chapter — couldn't pinpoint the exact passage."));
+    return;
+  }
+  const startR = textPosToRange(body, idx);
+  const endR = textPosToRange(body, idx + clean.length);
+  if (!startR || !endR) return;
+  const range = document.createRange();
+  range.setStart(startR.startContainer, startR.startOffset);
+  range.setEnd(endR.startContainer, endR.startOffset);
+  const scrollTo = range.startContainer.parentElement?.closest?.('p') || body;
+  scrollTo.scrollIntoView({ behavior: scrollBehavior(), block: 'center' });
+  // a brief "you are here" flash, not a sticky mark — same CSS Custom
+  // Highlight API Find & Replace already uses, rather than the real
+  // selection, so this doesn't steal focus/caret from goToChapterTop above
+  if (window.Highlight && window.CSS && CSS.highlights) {
+    CSS.highlights.set('neo-tracker-jump', new Highlight(range));
+    setTimeout(() => CSS.highlights.delete('neo-tracker-jump'), 2500);
+  }
+}
+
+// Right-click a text selection in the manuscript → create a character,
+// item, relic, skill, quest, or familiar in the tracker, prefilled with
+// whatever was selected. Registered after the spellcheck-suggestions and
+// macOS Look Up handlers (both already check/set e.defaultPrevented the
+// same way), so this only acts when neither of those claimed the click.
+document.addEventListener('contextmenu', async (e) => {
+  if (e.defaultPrevented) return;
+  const editor = e.target.closest && e.target.closest('.chapter-body');
+  if (!editor) return;
+  const sel = window.getSelection();
+  const text = sel && sel.rangeCount && !sel.isCollapsed ? sel.toString().trim() : '';
+  if (!text) return;
+  e.preventDefault();
+  const x = e.clientX, y = e.clientY;
+  const title = text.length > 28 ? text.slice(0, 28) + '…' : text;
+  const action = await popMenu(x, y, [
+    { label: t('Add character…'), value: 'character' },
+    { label: t('Add item…'), value: 'item' },
+    { label: t('Add relic…'), value: 'relic' },
+    { label: t('Add skill…'), value: 'skill' },
+    { label: t('Add quest…'), value: 'quest' },
+    { label: t('Add familiar…'), value: 'familiar' },
+  ], { title });
+  if (!action) return;
+  trackerFlowActive = true; // see its declaration above — keeps the pane open through the rest of this flow
+  await openTrackerPane();
+  if (!trackerReadyUrl) { toast(t("The tracker isn't available right now.")); trackerFlowActive = false; return; }
+  if (action === 'character') { await sendTrackerIntent('character', text); return; }
+  // everything else is attached to a specific character — ask which one.
+  // Scoped to the chapter being right-clicked in, when it's tagged with a
+  // cast (falls back to everyone otherwise); POV character first, else
+  // Jake, else whatever order the tracker already returned them in.
+  const chId = editor.closest('.chapter')?.dataset.id;
+  const n = chId ? chapterNumber(chId) : null;
+  let characters = [], povCharacter = null;
+  try {
+    const result = await (await fetch(trackerReadyUrl + '__neo-characters' + (n ? '?chapter=' + n : ''))).json();
+    characters = result.characters || [];
+    povCharacter = result.povCharacter || null;
+  } catch { /* stays empty */ }
+  if (!characters.length) { toast(t('No characters to choose from yet.')); trackerFlowActive = false; return; }
+  characters.sort((a, b) =>
+    (a.id === povCharacter ? -1 : b.id === povCharacter ? 1 : 0)
+    || (a.id === 'jake' ? -1 : b.id === 'jake' ? 1 : 0));
+  const owner = await popMenu(x, y, characters.map((c) => ({ label: c.name, value: c.id })), { title: t('For which character?') });
+  if (!owner) { trackerFlowActive = false; return; }
+  await sendTrackerIntent(action, text, owner);
 });
 
 /* ================================================================== */
