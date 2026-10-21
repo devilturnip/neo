@@ -8322,6 +8322,7 @@ document.addEventListener('contextmenu', async (e) => {
     { label: t('Add skill…'), value: 'skill' },
     { label: t('Add quest…'), value: 'quest' },
     { label: t('Add familiar…'), value: 'familiar' },
+    { label: t('Add mount…'), value: 'mount' },
   ], { title });
   if (!action) return;
   trackerFlowActive = true; // see its declaration above — keeps the pane open through the rest of this flow
