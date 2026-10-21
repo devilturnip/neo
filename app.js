@@ -8329,9 +8329,11 @@ document.addEventListener('contextmenu', async (e) => {
   if (!trackerReadyUrl) { toast(t("The tracker isn't available right now.")); trackerFlowActive = false; return; }
   if (action === 'character') { await sendTrackerIntent('character', text); return; }
   // everything else is attached to a specific character — ask which one.
-  // Scoped to the chapter being right-clicked in, when it's tagged with a
-  // cast (falls back to everyone otherwise); POV character first, else
-  // Jake, else whatever order the tracker already returned them in.
+  // Scoped to the chapter being right-clicked in, via its charactersPresent
+  // (tag the chapter's cast first — the Cast disclosure, or the status
+  // screen's "In this chapter" checkbox — if this should offer anyone);
+  // POV character first, else Jake, else whatever order the tracker
+  // already returned them in.
   let chId;
   if (editor) {
     chId = editor.closest('.chapter')?.dataset.id;
@@ -8349,11 +8351,13 @@ document.addEventListener('contextmenu', async (e) => {
     characters = result.characters || [];
     povCharacter = result.povCharacter || null;
   } catch { /* stays empty */ }
-  if (!characters.length) { toast(t('No characters to choose from yet.')); trackerFlowActive = false; return; }
   characters.sort((a, b) =>
     (a.id === povCharacter ? -1 : b.id === povCharacter ? 1 : 0)
     || (a.id === 'jake' ? -1 : b.id === 'jake' ? 1 : 0));
-  const owner = await popMenu(x, y, characters.map((c) => ({ label: c.name, value: c.id })), { title: t('For which character?') });
+  const items = characters.length
+    ? characters.map((c) => ({ label: c.name, value: c.id }))
+    : [{ label: t('No characters available'), value: null, disabled: true }];
+  const owner = await popMenu(x, y, items, { title: t('For which character?') });
   if (!owner) { trackerFlowActive = false; return; }
   await sendTrackerIntent(action, text, owner);
 });
