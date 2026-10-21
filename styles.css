@@ -1363,6 +1363,19 @@ body.focus-mode .walk-note { opacity: 0.6; }
   z-index: 70; overflow-y: auto; padding: 36px 0 20px;
 }
 #side-pane.open { transform: translateX(0); }
+/* the pane shows either the Stickies/Notes content (default) or the
+   litrpg-tracker panel, picked by data-mode (set in app.js) — tracker mode
+   also gets a lot more width, since the tracker's own layout wasn't built
+   for a 250px sidebar */
+#side-pane[data-mode="tracker"] { width: 560px; }
+#side-pane[data-mode="tracker"] #sticky-list,
+#side-pane[data-mode="tracker"] .side-title-notes { display: none; }
+#tracker-pane-body, .side-title-tracker { display: none; }
+#side-pane[data-mode="tracker"] #tracker-pane-body { display: block; height: 100%; padding: 0 20px; color: var(--muted); font-size: 13px; }
+#side-pane[data-mode="tracker"] .side-title-tracker { display: inline; }
+#tracker-frame { width: 100%; height: 100%; border: none; display: block; background: #fff; }
+/* tracker-pane-body could later pick up var(--pane)/var(--accent) to match
+   NEO's own chrome instead of the tracker's own styling — not done here */
 #side-head {
   display: flex; justify-content: space-between; align-items: center;
   padding: 0 16px 14px; font-size: 12px; text-transform: uppercase;
@@ -1430,6 +1443,11 @@ body.full-screen.focus-mode #bottombar:not(:hover):not(.attn) { opacity: 0; }
   cursor: pointer; padding: 0 2px; line-height: 1;
 }
 #zoom-control button:hover, #zoom-control:hover { color: #ddd; }
+/* the side pane (Notes & Comments) used to open on a right-edge hover;
+   it opens from this button instead, so the right edge stays free */
+#side-pane-toggle { background: none; border: none; color: var(--muted); font-size: 12px; cursor: pointer; margin-left: 10px; }
+#side-pane-toggle:hover { color: #ddd; }
+#side-pane-toggle.active { color: var(--accent); }
 
 /* --- Find & replace bar --- */
 #searchbar {
@@ -1693,7 +1711,7 @@ body.bright .pop-menu button:disabled { color: #8a8a8a; }
 /* An enlarged bottom bar in a small window keeps what matters: the tabs,
    today's words and the word count. At Normal size nothing is shed. */
 .ui-zoomed #bottombar { container-type: inline-size; }
-.ui-zoomed #counters span, .ui-zoomed .tab, .ui-zoomed #back-to-shelf { white-space: nowrap; }
+.ui-zoomed #counters span, .ui-zoomed .tab, .ui-zoomed #back-to-shelf, .ui-zoomed #side-pane-toggle { white-space: nowrap; }
 @container (max-width: 900px) {
   .ui-zoomed #pos-counter { display: none; }
   .ui-zoomed .tab { padding: 5px 10px; }
@@ -1703,6 +1721,7 @@ body.bright .pop-menu button:disabled { color: #8a8a8a; }
 @container (max-width: 700px) {
   .ui-zoomed #zoom-control { display: none; }
   .ui-zoomed #back-to-shelf span[data-i18n] { display: none; }
+  .ui-zoomed #side-pane-toggle { display: none; }
 }
 
 /* Help → Check for Update…: the download bar */
@@ -1832,7 +1851,9 @@ body.light .stickies-empty { color: #8f8a80; }
 /* the bottom bar and the find bar */
 body.light #bottombar { border-top-color: #dcd8d0; }
 body.light .tab:not(.active):hover, body.light #counters span:hover,
-body.light #zoom-control:hover, body.light #zoom-control button:hover { color: #1c1a17; }
+body.light #zoom-control:hover, body.light #zoom-control button:hover,
+body.light #side-pane-toggle:hover { color: #1c1a17; }
+body.light #side-pane-toggle.active { color: var(--accent); }
 body.light .tab.active { background: #e4e0d8; }
 body.light #searchbar { background: #fff; border-color: #d9d4ca; box-shadow: 0 6px 24px rgba(0,0,0,0.12); }
 body.light #searchbar input { background: #faf9f6; border-color: #cfcac0; color: #1c1a17; }

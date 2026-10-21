@@ -86,10 +86,13 @@
     <div id="side-hotzone"></div>
     <aside id="side-pane" data-i18n-label="Notes &amp; Comments">
       <div id="side-head">
-        <span data-i18n>Notes &amp; Comments</span>
+        <span class="side-title-notes" data-i18n>Notes &amp; Comments</span>
+        <span class="side-title-tracker" data-i18n>litrpg-tracker</span>
         <button id="side-pin" data-i18n-title title="Keep this pane open" data-i18n-label="Keep this pane open" aria-pressed="false">&#9737;</button>
       </div>
       <div id="sticky-list"></div>
+      <!-- the litrpg-tracker dev server lives here once the hover panel opens in tracker mode (app.js) -->
+      <div id="tracker-pane-body"></div>
     </aside>
 
     <!-- The manuscript -->
@@ -116,6 +119,7 @@
       <button id="back-to-shelf" data-i18n-title title="Back to your bookshelf" data-i18n-label="Back to your bookshelf"><span aria-hidden="true">&#8676;</span> <span data-i18n>Shelf</span></button>
       <div id="tabs" role="tablist">
         <div class="tab active" role="tab" tabindex="0" aria-selected="true" data-tab="manuscript" data-i18n>Manuscript</div>
+        <button id="side-pane-toggle" data-i18n-title title="Notes & Comments" data-i18n-label="Notes & Comments" aria-pressed="false"><span data-i18n>Stickies</span></button>
         <div class="tab" role="tab" tabindex="0" aria-selected="false" data-tab="notes" data-i18n>Notes</div>
         <div class="tab" role="tab" tabindex="0" aria-selected="false" data-tab="outline" data-i18n>Outline</div>
         <div class="tab darlings" role="tab" tabindex="0" aria-selected="false" data-tab="darlings" data-i18n data-i18n-title title="Drag any selection here. It's saved, not gone.">Darlings</div>

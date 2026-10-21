@@ -7536,7 +7536,7 @@ function markCurrentSticky(sid) {
 }
 
 function focusSticky(sid) {
-  $('#side-pane').classList.add('open');
+  openSidePane();
   const el = document.querySelector(`.sticky[data-sid="${sid}"] textarea`);
   if (!el) return;
   markCurrentSticky(sid);
@@ -7900,20 +7900,31 @@ function scheduleNavRefresh() {
 // Hover behavior for both side panes:
 function wireHoverPane(hotzone, pane, isPinnable) {
   // (a menu opened from the Chapters pane keeps it open while it's up)
+  // the tracker iframe is a genuinely separate renderer: crossing its
+  // boundary fires a spurious mouseleave on the pane in Chromium, which
+  // would otherwise close the pane out from under every click attempt —
+  // treated as pinned while in tracker mode so hover alone can't close it;
+  // clicking outside (the mousedown listener below) still does
   const pinned = () => (isPinnable && pane.dataset.pinned === '1') ||
     (pane.id === 'nav-pane' && (chapterDragActive || !!document.querySelector('.pop-menu'))) ||
-    (pane.id === 'side-pane' && $('#editor-view').classList.contains('darlings-tab')); // the snapshots stay
+    (pane.id === 'side-pane' && ($('#editor-view').classList.contains('darlings-tab') || pane.dataset.mode === 'tracker')); // the snapshots stay; so does the tracker, for the reason above
+  // this hover mechanism only ever opens the side pane in tracker mode — a
+  // mouseleave reaching here while some OTHER mode is showing (Stickies,
+  // switched to by its own button) is a stale event from the mouse's
+  // earlier travel away from the hotzone, not a real request to close
+  // whatever's showing now
+  const hoverOwnsThis = () => pane.id !== 'side-pane' || pane.dataset.mode === 'tracker';
   hotzone.addEventListener('mouseenter', (e) => {
     if (e.buttons) return; // dragging something — stand down
     pane.classList.add('open');
   });
   hotzone.addEventListener('mouseleave', (e) => {
-    if (pinned()) return;
+    if (!hoverOwnsThis() || pinned()) return;
     if (e.relatedTarget && pane.contains(e.relatedTarget)) return;
     pane.classList.remove('open');
   });
   pane.addEventListener('mouseleave', () => {
-    if (pinned()) return;
+    if (!hoverOwnsThis() || pinned()) return;
     pane.classList.remove('open');
   });
 }
@@ -7929,13 +7940,25 @@ $('#nav-pane').addEventListener('dragleave', (e) => {
   if (e.relatedTarget && (pane.contains(e.relatedTarget) || e.relatedTarget.id === 'nav-hotzone')) return;
   pane.classList.remove('open');
 });
+// the litrpg-tracker panel opens the same way Notes & Comments used to:
+// hovering the right edge. Registered before wireHoverPane's own listener so
+// the mode (and the aria-label) is set before .open paints the pane open.
+let trackerPaneOpenedAt = 0;
+$('#side-hotzone').addEventListener('mouseenter', (e) => {
+  if (e.buttons) return; // dragging something — stand down, same guard wireHoverPane uses
+  const pane = $('#side-pane');
+  pane.dataset.mode = 'tracker';
+  pane.setAttribute('aria-label', t('litrpg-tracker'));
+  trackerPaneOpenedAt = Date.now(); // the slide-in transition takes 0.18s — see the mousemove listener below
+  ensureTrackerPane();
+});
 wireHoverPane($('#side-hotzone'), $('#side-pane'), true);
-
 // leaving the window closes unpinned panes (they used to stick open)
 function closeUnpinnedPanes() {
   // Wayland can blur the window as a native chapter drag begins.
   if (!chapterDragActive && $('#nav-pane').dataset.pinned !== '1') $('#nav-pane').classList.remove('open');
-  if ($('#side-pane').dataset.pinned !== '1' && !$('#editor-view').classList.contains('darlings-tab')) $('#side-pane').classList.remove('open');
+  const side = $('#side-pane');
+  if (side.dataset.pinned !== '1' && !$('#editor-view').classList.contains('darlings-tab') && side.dataset.mode !== 'tracker') closeSidePane();
 }
 document.documentElement.addEventListener('mouseleave', closeUnpinnedPanes);
 window.addEventListener('blur', closeUnpinnedPanes);
@@ -7960,6 +7983,11 @@ function pinPane(side, on, key = side) {
   pin.setAttribute('aria-pressed', on ? 'true' : 'false');
   $('#editor-view').classList.toggle(side + '-pinned', on);
   if (on) pane.classList.add('open');
+  if (side === 'side') {
+    const open = pane.classList.contains('open');
+    $('#side-pane-toggle').classList.toggle('active', open);
+    $('#side-pane-toggle').setAttribute('aria-pressed', open ? 'true' : 'false');
+  }
   try {
     const kept = JSON.parse(localStorage.getItem('neo-pinned-panes') || '{}');
     kept[key] = on;
@@ -7975,6 +8003,123 @@ if (!NO_HOVER) {
     if (kept.side) pinPane('side', true);
   } catch { /* nothing kept */ }
 }
+
+// The side pane (Notes & Comments) opens from this bottombar button instead
+// of a right-edge hover, so the right edge is free for other things.
+function openSidePane() {
+  const pane = $('#side-pane');
+  pane.dataset.mode = 'stickies';
+  pane.setAttribute('aria-label', t('Notes & Comments'));
+  pane.classList.add('open');
+  sideCardsUpdate(true); // the "cards beside the page" preview, same as the old hover used to trigger
+  $('#side-pane-toggle').classList.add('active');
+  $('#side-pane-toggle').setAttribute('aria-pressed', 'true');
+}
+function closeSidePane() {
+  $('#side-pane').classList.remove('open');
+  $('#side-pane-toggle').classList.remove('active');
+  $('#side-pane-toggle').setAttribute('aria-pressed', 'false');
+}
+$('#side-pane-toggle').onclick = () => {
+  const pane = $('#side-pane');
+  // open in some OTHER mode (the tracker, now that it can stay open while
+  // you work in it) switches to stickies rather than just closing it
+  if (pane.classList.contains('open') && pane.dataset.mode === 'stickies') closeSidePane();
+  else openSidePane();
+};
+// a click outside the (unpinned) open pane closes it, the way a pop-menu does
+document.addEventListener('mousedown', (e) => {
+  const pane = $('#side-pane');
+  if (!pane.classList.contains('open') || pane.dataset.pinned === '1') return;
+  if ($('#editor-view').classList.contains('darlings-tab')) return; // snapshots stay
+  if (pane.contains(e.target) || e.target.closest('#side-pane-toggle')) return;
+  closeSidePane();
+}, true);
+
+// The litrpg-tracker panel: a live view of its own dev server, embedded as
+// an iframe in #tracker-pane-body (the pane's tracker-mode content). The
+// pane itself opens immediately on hover regardless of load state — this
+// only gates the iframe's own creation/loading.
+let trackerFrame = null;
+let trackerReadyUrl = null;
+let trackerPanePromise = null;
+function ensureTrackerPane() {
+  if (trackerPanePromise) return trackerPanePromise;
+  trackerPanePromise = (async () => {
+    const result = await window.neo.trackerEnsure();
+    const body = $('#tracker-pane-body');
+    if (!result.ok) {
+      body.textContent = t('Tracker not available') + (result.reason === 'missing-repo' ? '' : ' (' + result.reason + ')');
+      trackerPanePromise = null; // let the next hover try again
+      return;
+    }
+    // a trailing slash matters for the URLs built from this below
+    trackerReadyUrl = result.url.replace(/\/?$/, '/');
+    notifyTrackerOfChapter(true); // the dev server is up — post the current chapter now, so it's already there the moment the page's own poll starts (no need to wait on the iframe's load)
+    if (!trackerFrame) {
+      trackerFrame = document.createElement('iframe');
+      trackerFrame.id = 'tracker-frame';
+      body.textContent = ''; // clear any earlier "not available" message
+      body.appendChild(trackerFrame);
+    }
+    // ?embed=neo tells the tracker's own App.tsx to pick its 'neo' theme
+    // scheme (theme.css) — flat, muted, NEO's own palette/font — instead of
+    // its usual Castlevania-pause-menu look
+    const frameSrc = trackerReadyUrl + '?embed=neo';
+    if (trackerFrame.src !== frameSrc) trackerFrame.src = frameSrc;
+  })();
+  return trackerPanePromise;
+}
+
+// Follows the current chapter as the author writes/navigates. This was
+// originally a cross-origin location.href navigation (differing only in the
+// fragment, so the browser treats it as a same-document hash change), then
+// a contentWindow.postMessage() — both reliably hung the renderer in
+// testing. This instead posts to the dev server's own /__neo-chapter
+// endpoint (fire-and-forget, mode:'no-cors' since it's a file://-to-http
+// cross-origin request NEO never needs to read a response from), which
+// litrpg-tracker's App.tsx polls — the same shape as every other write this
+// app already makes to that server. Debounced so rapid scroll-driven
+// chapter changes don't spam requests; skips a redundant post to the same
+// chapter.
+let trackerNotifiedChapter = null;
+let trackerNotifyTimer = null;
+function notifyTrackerOfChapter(immediate) {
+  if (!trackerReadyUrl || !currentChapterId || !book) return;
+  clearTimeout(trackerNotifyTimer);
+  const go = () => {
+    const n = chapterNumber(currentChapterId);
+    if (n === trackerNotifiedChapter) return;
+    trackerNotifiedChapter = n;
+    fetch(trackerReadyUrl + '__neo-chapter?n=' + n, { method: 'POST', mode: 'no-cors' }).catch(() => {});
+  };
+  if (immediate) go();
+  else trackerNotifyTimer = setTimeout(go, 400);
+}
+
+// Closes the tracker panel once the mouse has genuinely left it — but not
+// via mouseleave, which (per the comment on hoverOwnsThis above) fires the
+// instant the cursor crosses onto the iframe and can't be trusted here.
+// This instead checks real cursor position against the pane's own bounding
+// box on every mousemove the parent document actually receives. That
+// naturally stops firing the moment the cursor enters the iframe (its
+// content never bubbles mouse events up to this document at all), so the
+// last reading just holds "still inside" for as long as the cursor is in
+// there, and resumes — accurately — the instant it's back over our own
+// content. No debounce needed: by the time a mousemove reports the cursor
+// outside the pane, it genuinely is.
+document.addEventListener('mousemove', (e) => {
+  const pane = $('#side-pane');
+  if (pane.dataset.mode !== 'tracker' || !pane.classList.contains('open') || pane.dataset.pinned === '1') return;
+  // the pane's own 0.18s slide-in transition means its rect is still mid-
+  // animation (partly off-screen) for a moment right after opening —
+  // skip the check until that's settled, or it reads as "outside" and
+  // closes the pane an instant after it opened
+  if (Date.now() - trackerPaneOpenedAt < 250) return;
+  const r = pane.getBoundingClientRect();
+  const inside = e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom;
+  if (!inside) pane.classList.remove('open');
+});
 
 /* ================================================================== */
 /*  NOTES PAGES — the book's, and one for each chapter                 */
@@ -11465,11 +11610,22 @@ function sidePaneForTab(name) {
   $('#editor-view').classList.toggle('outline-tab', outline);
   if (outline) renderLooseCards();
   // on Darlings the pane holds the book's snapshots, and stays open
-  const was = $('#editor-view').classList.contains('darlings-tab');
   const dar = name === 'darlings' && !!book && snapsCan() && !IS_POCKET; // (Pocket's own list: later)
   $('#editor-view').classList.toggle('darlings-tab', dar);
   if (dar) { snapList(); $('#side-pane').classList.add('open'); }
-  else if (was && $('#side-pane').dataset.pinned !== '1') $('#side-pane').classList.remove('open');
+  // Stickies (sticky notes) only live in the pane on Manuscript — elsewhere
+  // the pane is someone else's (Notes' chapter notes, Outline's loose cards,
+  // Darlings' snapshots), so a button promising sticky notes there would
+  // just show the wrong thing and look like a duplicate of that tab
+  const onManuscript = name === 'manuscript';
+  $('#side-pane-toggle').hidden = !onManuscript;
+  if (onManuscript) {
+    const open = $('#side-pane').classList.contains('open');
+    $('#side-pane-toggle').classList.toggle('active', open);
+    $('#side-pane-toggle').setAttribute('aria-pressed', open ? 'true' : 'false');
+  } else if (!dar && $('#side-pane').dataset.pinned !== '1') {
+    closeSidePane();
+  }
 }
 
 // ---- the note walks ahead ----
@@ -11657,8 +11813,7 @@ function sideCardsUpdate(force) {
 }
 document.addEventListener('selectionchange', queueSideCards);
 // the pane coming into view shows the cards as they are now (the Outline may
-// have changed them since)
-$('#side-hotzone').addEventListener('mouseenter', () => sideCardsUpdate(true));
+// have changed them since) — handled by openSidePane() itself now
 
 function walkNoteUpdate() {
   walkQueued = false;
@@ -11939,6 +12094,7 @@ function bookWordCount() {
 
 function updateCounters() {
   if (!book) return;
+  notifyTrackerOfChapter(); // debounced itself — cheap to call every time this does
   // a script is one long chapter: its words are counted when the typing
   // pauses, not at every key
   if (isScript() && !updateCounters.now) {

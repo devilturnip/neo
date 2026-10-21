@@ -2139,6 +2139,79 @@ function dailyBackup() {
 let backupRunning = false;
 
 // ---------------------------------------------------------------------------
+// Tracker panel
+// A separate project (litrpg-tracker) with its own Vite dev server, embedded
+// as an iframe in the right-edge hover panel. This just gets a running
+// server and hands back its URL — Linux only for now (no shell:true/npm.cmd
+// handling for Windows, no macOS-specific kill strategy).
+// ---------------------------------------------------------------------------
+const TRACKER_DIR = path.join(os.homedir(), 'Projects', 'litrpg-tracker');
+let trackerChild = null; // only set when WE spawned it — never kill a server we just found running
+let trackerReadyPromise = null;
+
+async function trackerPing(port) {
+  try {
+    const res = await fetch('http://localhost:' + port + '/__dataset', { signal: AbortSignal.timeout(1000) });
+    return res.ok;
+  } catch { return false; }
+}
+
+// Polls until /__dataset answers on the given port, or gives up after ~20s
+function trackerWaitUntilReady(port) {
+  return new Promise((resolve) => {
+    const deadline = Date.now() + 20000;
+    const tick = async () => {
+      if (await trackerPing(port)) { resolve(true); return; }
+      if (Date.now() > deadline) { resolve(false); return; }
+      setTimeout(tick, 300);
+    };
+    tick();
+  });
+}
+
+function ensureTrackerRunning() {
+  if (trackerReadyPromise) return trackerReadyPromise;
+  trackerReadyPromise = (async () => {
+    if (!fs.existsSync(TRACKER_DIR)) return { ok: false, reason: 'missing-repo' };
+    // already running (Spencer's own terminal, or a previous NEO session) — use it, don't spawn a second one
+    if (await trackerPing(5173)) return { ok: true, url: 'http://localhost:5173' };
+    try {
+      const child = require('child_process').spawn('npm', ['run', 'dev'], { cwd: TRACKER_DIR, stdio: ['ignore', 'pipe', 'ignore'] });
+      trackerChild = child;
+      // any exit invalidates the cache, so the next call starts fresh instead of reusing a dead promise
+      child.on('exit', () => { if (trackerChild === child) trackerChild = null; trackerReadyPromise = null; });
+      // Vite's own startup line looks like "  ➜  Local:   http://localhost:5173/" — read the real
+      // port back rather than assuming 5173, in case something else already held it
+      const port = await new Promise((resolve) => {
+        let done = false;
+        const settle = (p) => { if (!done) { done = true; resolve(p); } };
+        child.stdout.on('data', (buf) => {
+          const m = /http:\/\/localhost:(\d+)/.exec(buf.toString());
+          if (m) settle(Number(m[1]));
+        });
+        child.once('exit', () => settle(null));
+        setTimeout(() => settle(null), 5000); // Vite usually prints within ~1s
+      });
+      const actualPort = port || 5173; // fall back to the default if we never caught the startup line
+      const ready = await trackerWaitUntilReady(actualPort);
+      if (!ready) return { ok: false, reason: 'timeout' };
+      return { ok: true, url: 'http://localhost:' + actualPort };
+    } catch (err) {
+      logError('tracker', err);
+      trackerReadyPromise = null;
+      return { ok: false, reason: 'spawn-failed' };
+    }
+  })();
+  return trackerReadyPromise;
+}
+
+ipcMain.handle('tracker:ensure', () => ensureTrackerRunning());
+
+app.on('before-quit', () => {
+  if (trackerChild) { try { trackerChild.kill(); } catch { /* already gone */ } }
+});
+
+// ---------------------------------------------------------------------------
 // Window
 // The window's own color, seen for a moment before the page draws and at the
 // edges while it resizes: the room's color, dark or (View → Page → Light) light

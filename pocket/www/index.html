@@ -90,6 +90,8 @@
         <button id="side-pin" data-i18n-title title="Keep this pane open" data-i18n-label="Keep this pane open" aria-pressed="false">&#9737;</button>
       </div>
       <div id="sticky-list"></div>
+      <!-- the tracker panel is desktop-only (spawns a local dev server) — this stand-in is just for id parity -->
+      <div id="tracker-pane-body" hidden></div>
     </aside>
 
     <!-- The manuscript -->
@@ -127,6 +129,8 @@
         <span id="word-counter" data-i18n-title title="Click to cycle book / chapter word count"></span>
         <span id="zoom-control" hidden><button id="zoom-out">&#8722;</button><span id="zoom-level">100%</span><button id="zoom-in">+</button></span>
       </div>
+      <!-- stands in for the desktop's bottombar toggle; Pocket opens Notes & Comments by the right-edge swipe instead -->
+      <button id="side-pane-toggle" hidden></button>
       <button id="pocket-more" data-i18n-title title="Format and goals" data-i18n-label="Format and goals">&#8943;</button>
     </footer>
 
