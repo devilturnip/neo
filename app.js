@@ -5412,7 +5412,31 @@ function createChapterAt(idx) {
   persistChapter(chId);
   saveMeta();
   renderChapters();
+  // The one shared place every interactive "make a new chapter" gesture
+  // goes through (3-Enter split, the Chapters pane's +, Outline's Enter/
+  // Shift+Tab, the card view's +Chapter) — not file import or sync/undo
+  // mechanics, which build chapter ids by hand instead of calling this.
+  notifyTrackerOfNewChapter(chId);
   return chId;
+}
+
+// Opens the tracker panel and its own "New chapter" dialog, prefilled with
+// the chapter number NEO just gave this chapter — fire-and-forget, same
+// reasoning as sendTrackerIntent below (createChapterAt itself must stay
+// synchronous for its many existing callers).
+function notifyTrackerOfNewChapter(chId) {
+  void (async () => {
+    // The pane opens here with the mouse wherever the author's typing left
+    // it — almost never over the pane itself — so the mousemove auto-close
+    // listener (see its comment above) would otherwise close it again the
+    // instant it next fires, often before the dialog has even loaded.
+    // trackerFlowActive holds it open the same way the right-click "Add to
+    // the tracker" flow does, until the cursor genuinely moves over it.
+    trackerFlowActive = true;
+    await openTrackerPane();
+    if (!trackerReadyUrl) { trackerFlowActive = false; return; } // tracker not available — nothing to do
+    await sendTrackerIntent('chapter-create', String(chapterNumber(chId)));
+  })();
 }
 
 function newChapter() {
@@ -8104,6 +8128,11 @@ function ensureTrackerPane() {
     if (!trackerFrame) {
       trackerFrame = document.createElement('iframe');
       trackerFrame.id = 'tracker-frame';
+      // Cross-origin iframes don't inherit clipboard access by default —
+      // without this, its own "Copy" buttons call navigator.clipboard.
+      // writeText() and it silently fails (NotAllowedError, swallowed),
+      // so the button looks like it worked but nothing lands on paste.
+      trackerFrame.allow = 'clipboard-write';
       body.textContent = ''; // clear any earlier "not available" message
       body.appendChild(trackerFrame);
     }
@@ -8140,6 +8169,26 @@ function notifyTrackerOfChapter(immediate) {
   };
   if (immediate) go();
   else trackerNotifyTimer = setTimeout(go, 400);
+}
+
+// Same reasoning and shape as notifyTrackerOfChapter above, for the word
+// count of whatever chapter is currently being written — called from
+// updateCounters(), so it rides along with every count refresh rather than
+// needing its own typing listener. Only ever reports the chapter currently
+// open; other chapters' counts stay whatever they were until visited.
+let trackerNotifiedWords = null;
+let trackerNotifyWordsTimer = null;
+function notifyTrackerOfWordCount() {
+  if (!trackerReadyUrl || !currentChapterId || !book) return;
+  clearTimeout(trackerNotifyWordsTimer);
+  trackerNotifyWordsTimer = setTimeout(() => {
+    const n = chapterNumber(currentChapterId);
+    const words = chapterWords(currentChapterId);
+    const key = n + ':' + words;
+    if (key === trackerNotifiedWords) return;
+    trackerNotifiedWords = key;
+    fetch(trackerReadyUrl + '__neo-wordcount?chapter=' + n + '&words=' + words, { method: 'POST', mode: 'no-cors' }).catch(() => {});
+  }, 1000); // typing settles before this fires — no point syncing every keystroke
 }
 
 // Closes the tracker panel once the mouse has genuinely left it — but not
@@ -8256,7 +8305,10 @@ function jumpToTrackerGoto(n, quote) {
 document.addEventListener('contextmenu', async (e) => {
   if (e.defaultPrevented) return;
   const editor = e.target.closest && e.target.closest('.chapter-body');
-  if (!editor) return;
+  // Cut text in Darlings has no live .chapter-body/.chapter — the darling
+  // object itself (darlings array) remembers which chapter it came from.
+  const darlingText = !editor && e.target.closest && e.target.closest('#darlings-list .darling-text');
+  if (!editor && !darlingText) return;
   const sel = window.getSelection();
   const text = sel && sel.rangeCount && !sel.isCollapsed ? sel.toString().trim() : '';
   if (!text) return;
@@ -8280,7 +8332,16 @@ document.addEventListener('contextmenu', async (e) => {
   // Scoped to the chapter being right-clicked in, when it's tagged with a
   // cast (falls back to everyone otherwise); POV character first, else
   // Jake, else whatever order the tracker already returned them in.
-  const chId = editor.closest('.chapter')?.dataset.id;
+  let chId;
+  if (editor) {
+    chId = editor.closest('.chapter')?.dataset.id;
+  } else {
+    const did = darlingText.closest('.darling')?.dataset.did;
+    const d = darlings.find((x) => x.id === did);
+    // the chapter it was cut from may since have been deleted — falls back
+    // to the full cast below, same as an untagged chapter would
+    chId = d && book.chapterOrder.includes(d.chapterId) ? d.chapterId : null;
+  }
   const n = chId ? chapterNumber(chId) : null;
   let characters = [], povCharacter = null;
   try {
@@ -12165,7 +12226,9 @@ function renderDarlings() {
   for (const d of darlings) {
     const el = document.createElement('div');
     el.className = 'darling';
+    el.dataset.did = d.id; // so the tracker right-click handler can look this darling back up
     const content = document.createElement('div');
+    content.className = 'darling-text';
     if (d.html) content.innerHTML = d.html;
     else content.textContent = d.text;
     const meta = document.createElement('div');
@@ -12271,6 +12334,7 @@ function bookWordCount() {
 function updateCounters() {
   if (!book) return;
   notifyTrackerOfChapter(); // debounced itself — cheap to call every time this does
+  notifyTrackerOfWordCount(); // same — debounced itself
   // a script is one long chapter: its words are counted when the typing
   // pauses, not at every key
   if (isScript() && !updateCounters.now) {
