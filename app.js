@@ -8424,12 +8424,17 @@ document.addEventListener('contextmenu', async (e) => {
     { label: t('Add quest…'), value: 'quest' },
     { label: t('Add familiar…'), value: 'familiar' },
     { label: t('Add mount…'), value: 'mount' },
+    { label: t('Add location…'), value: 'location' },
   ], { title });
   if (!action) return;
   trackerFlowActive = true; // see its declaration above — keeps the pane open through the rest of this flow
   await openTrackerPane();
   if (!trackerReadyUrl) { toast(t("The tracker isn't available right now.")); trackerFlowActive = false; return; }
   if (action === 'character') { await sendTrackerIntent('character', text); return; }
+  // a location belongs to the chapter on screen, not to anyone in it —
+  // same early return as 'character' above, skipping the "which
+  // character?" picker below entirely.
+  if (action === 'location') { await sendTrackerIntent('location', text); return; }
   // everything else is attached to a specific character — ask which one.
   // Scoped to the chapter being right-clicked in, via its charactersPresent
   // (tag the chapter's cast first — the Cast disclosure, or the status
