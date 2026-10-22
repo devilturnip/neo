@@ -8218,6 +8218,33 @@ function notifyTrackerOfWordCount() {
   }, 1000); // typing settles before this fires — no point syncing every keystroke
 }
 
+// NEO's own live manuscript selection, followed into the tracker so a +/-
+// or EditDialog edit made there can tie itself to a sentence in the text —
+// select it here first, then make the edit over in the panel. No explicit
+// Content-Type, so the body defaults to text/plain and the request stays
+// CORS-simple, same reasoning as sendManuscriptText below. Pushes the empty
+// string the moment the selection collapses or moves outside the chapter
+// body, so a stale quote never lingers past the instant it stops being
+// true — unlike the one-shot intents elsewhere on this pane, this is live
+// state, always reflecting whatever's highlighted right now.
+let trackerNotifiedSelection = null;
+let trackerNotifySelectionTimer = null;
+function notifyTrackerOfSelection() {
+  if (!trackerReadyUrl) return;
+  clearTimeout(trackerNotifySelectionTimer);
+  trackerNotifySelectionTimer = setTimeout(() => {
+    const sel = window.getSelection();
+    let el = sel.rangeCount ? sel.anchorNode : null;
+    if (el && el.nodeType === Node.TEXT_NODE) el = el.parentElement;
+    const body = el && el.closest ? el.closest('.chapter-body') : null;
+    const text = body && !sel.isCollapsed ? sel.toString().trim() : '';
+    if (text === trackerNotifiedSelection) return;
+    trackerNotifiedSelection = text;
+    fetch(trackerReadyUrl + '__neo-selection', { method: 'POST', body: text }).catch(() => {});
+  }, 300);
+}
+document.addEventListener('selectionchange', notifyTrackerOfSelection);
+
 // Closes the tracker panel once the mouse has genuinely left it — but not
 // via mouseleave, which (per the comment on hoverOwnsThis above) fires the
 // instant the cursor crosses onto the iframe and can't be trusted here.
@@ -8365,8 +8392,9 @@ function jumpToTrackerGoto(n, quote) {
   // Highlight API Find & Replace already uses, rather than the real
   // selection, so this doesn't steal focus/caret from goToChapterTop above
   if (window.Highlight && window.CSS && CSS.highlights) {
+    clearTimeout(trackerJumpHighlightTimer);
     CSS.highlights.set('neo-tracker-jump', new Highlight(range));
-    setTimeout(() => CSS.highlights.delete('neo-tracker-jump'), 2500);
+    trackerJumpHighlightTimer = setTimeout(() => CSS.highlights.delete('neo-tracker-jump'), 2500);
   }
 }
 
