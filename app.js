@@ -8229,6 +8229,42 @@ async function sendTrackerIntent(type, text, owner) {
   await fetch(url, { method: 'POST', mode: 'no-cors' }).catch(() => {});
 }
 
+// The whole book's plain text, one entry per chapter — pushed to the
+// tracker every 10 minutes (see the interval below) or right away when its
+// own "Check now" button asks for it (see checkWantsManuscript below), for
+// checking whether a tracker entry's quoted source text still exists where
+// it's filed. chapterText() (used elsewhere for word counts) already
+// handles a chapter whether or not it's the one currently rendered —
+// cloning the live .chapter-body when it is, parsing the cached
+// chapterHTML otherwise — so this just walks every chapter with it. No
+// explicit Content-Type, so fetch defaults to text/plain and the request
+// stays CORS-simple (no preflight) — same reasoning as every other
+// NEO→tracker push, just a body instead of a query string since a whole
+// manuscript won't fit in a URL.
+async function sendManuscriptText() {
+  if (!trackerReadyUrl || !book) return;
+  const chapters = book.chapterOrder.map((chId) => ({
+    number: chapterNumber(chId),
+    text: chapterText(chId),
+  }));
+  await fetch(trackerReadyUrl + '__neo-manuscript-text', {
+    method: 'POST',
+    body: JSON.stringify({ chapters }),
+  }).catch(() => {});
+}
+setInterval(() => { void sendManuscriptText(); }, 600000); // 10 minutes
+
+// The reverse of sendManuscriptText: a pending "send it now" request from
+// the tracker's own "Check now" button, polled the same 1s cadence as
+// checkTrackerGoto just below (same reasoning — cheap enough to just
+// always be running).
+async function checkWantsManuscript() {
+  if (!trackerReadyUrl) return;
+  let body;
+  try { body = await (await fetch(trackerReadyUrl + '__request-manuscript-text')).json(); } catch { return; }
+  if (body && body.wants) void sendManuscriptText();
+}
+
 // Jumping to a log entry's spot in the manuscript: the reverse of the two
 // functions above — everything else in this file pushes to the tracker's
 // dev server, but a log row's jump icon writes a pending request there
@@ -8238,7 +8274,7 @@ async function sendTrackerIntent(type, text, owner) {
 // been opened yet this session (trackerReadyUrl unset) or there's nothing
 // pending — cheap enough to just always be running, like the dev server
 // probe above.
-setInterval(() => { void checkTrackerGoto(); }, 1000);
+setInterval(() => { void checkTrackerGoto(); void checkWantsManuscript(); }, 1000);
 async function checkTrackerGoto() {
   if (!trackerReadyUrl) return;
   let body;
