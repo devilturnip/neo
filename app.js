@@ -7986,6 +7986,10 @@ function openTrackerPane() {
   pane.setAttribute('aria-label', t('litrpg-tracker'));
   pane.classList.add('open');
   trackerPaneOpenedAt = Date.now(); // the slide-in transition takes 0.18s — see the mousemove listener below
+  rememberPinnedSideMode();
+  // Otherwise the Outline cards preview can sit there stale, stacked above
+  // the tracker, until the next selection change happens to clear it.
+  sideCardsUpdate(true);
   return ensureTrackerPane();
 }
 $('#side-hotzone').addEventListener('mouseenter', (e) => {
@@ -8033,6 +8037,25 @@ function pinPane(side, on, key = side) {
     kept[key] = on;
     localStorage.setItem('neo-pinned-panes', JSON.stringify(kept));
   } catch { /* fine: it just won't be remembered */ }
+  // Pinning the side pane usually happens after it's already open (hover
+  // it open, then click Keep Open) — capture whatever mode it's showing
+  // right now, not just whether it's pinned.
+  if (side === 'side' && on) rememberPinnedSideMode();
+}
+// The side pane has more than one thing it can show (the tracker, Notes &
+// Comments) — pinning it only remembers *that* it's open, not which, so a
+// pin left on the tracker reopened to Notes & Comments at next launch
+// instead. Called whenever the pane's content changes (openTrackerPane,
+// openSidePane) so the saved mode always matches what's actually on screen,
+// not just whatever it was when the pin was first clicked.
+function rememberPinnedSideMode() {
+  const pane = $('#side-pane');
+  if (pane.dataset.pinned !== '1') return;
+  try {
+    const kept = JSON.parse(localStorage.getItem('neo-pinned-panes') || '{}');
+    kept.sideMode = pane.dataset.mode || '';
+    localStorage.setItem('neo-pinned-panes', JSON.stringify(kept));
+  } catch { /* fine: it just won't be remembered */ }
 }
 $('#side-pin').onclick = () => pinPane('side', $('#side-pane').dataset.pinned !== '1');
 $('#nav-pin').onclick = () => pinPane('nav', $('#nav-pane').dataset.pinned !== '1', book && isScript() ? 'scriptNav' : 'nav');
@@ -8040,7 +8063,10 @@ if (!NO_HOVER) {
   try {
     const kept = JSON.parse(localStorage.getItem('neo-pinned-panes') || '{}');
     if (kept.nav) pinPane('nav', true);
-    if (kept.side) pinPane('side', true);
+    if (kept.side) {
+      if (kept.sideMode === 'tracker') openTrackerPane();
+      pinPane('side', true);
+    }
   } catch { /* nothing kept */ }
 }
 
@@ -8077,6 +8103,7 @@ function openSidePane() {
   sideCardsUpdate(true); // the "cards beside the page" preview, same as the old hover used to trigger
   $('#side-pane-toggle').classList.add('active');
   $('#side-pane-toggle').setAttribute('aria-pressed', 'true');
+  rememberPinnedSideMode();
 }
 function closeSidePane() {
   $('#side-pane').classList.remove('open');
@@ -8291,12 +8318,22 @@ function chapterIdForNumber(n) {
   return book.chapterOrder.find((chId) => chapterNumber(chId) === n) || null;
 }
 
+// Guards the flash below against its own stale timeout: paging to a new
+// reference before the previous one's 2.5s is up used to still fire that
+// old delete on schedule, wiping out the brand-new highlight early (or
+// instantly, if jumps come fast) — "sometimes it's there, sometimes it's
+// not" depending purely on how quickly the next jump happened to land.
+let trackerJumpHighlightTimer = null;
+
 function jumpToTrackerGoto(n, quote) {
   const chId = chapterIdForNumber(n);
   if (!chId) { toast(t("Chapter not found in the open manuscript.")); return; }
-  // so the manuscript being jumped to is actually visible, not sitting
-  // behind/beside the panel the request just came from
-  closeSidePane();
+  // Used to close the pane here so the manuscript wasn't hidden behind it —
+  // but a jump now often comes bundled with a properties dialog opening in
+  // that same pane (a tracker row's click does both at once), and closing
+  // out from under that dialog was worse than whatever sliver of manuscript
+  // the open pane covers. The pane already makes room for the page rather
+  // than overlaying it, so there's nothing left to hide behind anyway.
   goToChapterTop(chId);
   if (!quote) return;
   const body = document.querySelector(`.chapter[data-id="${chId}"] .chapter-body`);
@@ -11989,8 +12026,15 @@ function queueSideCards() {
 }
 function sideCardsUpdate(force) {
   const box = sideCardsBox();
-  // (the cards beside the page are behind Show More Features)
-  if (!book || currentTab !== 'manuscript' || !moreOn()) { if (sideCardsKey) { box.innerHTML = ''; sideCardsKey = ''; } return; }
+  // (the cards beside the page are behind Show More Features, and have no
+  // business showing while the pane is given over to the tracker instead —
+  // #side-cards sits right before #side-head regardless of what the pane's
+  // current mode is, so without this check it stacks on top of whatever
+  // the tracker itself is showing)
+  if (!book || currentTab !== 'manuscript' || !moreOn() || $('#side-pane').dataset.mode === 'tracker') {
+    if (sideCardsKey) { box.innerHTML = ''; sideCardsKey = ''; }
+    return;
+  }
   if (box.contains(document.activeElement)) return; // being typed on
   const sel = window.getSelection();
   let el = sel.rangeCount ? sel.anchorNode : null;
