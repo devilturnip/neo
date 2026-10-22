@@ -1,6 +1,8 @@
-# NEO
+# NEO (with litrpg-tracker)
 
 **A distraction-free word processor for authors, by a wannabe author.**
+
+This is a personal fork of [hughhowey/neo](https://github.com/hughhowey/neo) with [litrpg-tracker](https://github.com/devilturnip/litrpg-tracker) embedded as a side panel — a companion app for tracking a litRPG novel's stats, inventory, and quests alongside the manuscript. Everything below describes upstream NEO; the tracker integration is this fork's own addition (see `scripts/launch-with-tracker.sh`).
 
 NEO understands from the moment you install it that you are writing *books* and nothing else. No bloat, no distractions, with manuscripts that look like books as you write them.
 
@@ -96,8 +98,8 @@ NEO speaks English, French, Spanish, Portuguese, German, Italian, Dutch, Polish,
 Requires [Node.js](https://nodejs.org).
 
 ```
-git clone https://github.com/hughhowey/neo.git
-cd neo
+git clone https://github.com/devilturnip/neo-with-tracker.git
+cd neo-with-tracker
 npm install
 npm start
 ```
