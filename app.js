@@ -8238,9 +8238,33 @@ function notifyTrackerOfSelection() {
     if (el && el.nodeType === Node.TEXT_NODE) el = el.parentElement;
     const body = el && el.closest ? el.closest('.chapter-body') : null;
     const text = body && !sel.isCollapsed ? sel.toString().trim() : '';
-    if (text === trackerNotifiedSelection) return;
-    trackerNotifiedSelection = text;
-    fetch(trackerReadyUrl + '__neo-selection', { method: 'POST', body: text }).catch(() => {});
+    // Which occurrence of `text` within this chapter the selection's own
+    // start falls at (1 = the first) — so the tracker can tell apart two
+    // references that happen to share the same chapter and quote (the
+    // same short word mentioned twice), and later jump back to the right
+    // one instead of always the first match of that text. Best-effort:
+    // only computed when the selection's start position can be found at
+    // all; nothing downstream requires it.
+    let occurrence = null;
+    if (text) {
+      const range = sel.getRangeAt(0);
+      const pos = rangeToTextPos(body, range.startContainer, range.startOffset);
+      if (pos !== -1) {
+        const plain = bodyPlainText(body).toLowerCase();
+        const needle = text.toLowerCase();
+        let idx = -1, count = 0;
+        while ((idx = plain.indexOf(needle, idx + 1)) !== -1 && idx <= pos) count++;
+        if (count > 0) occurrence = count;
+      }
+    }
+    // Keyed on text+occurrence together, not text alone — otherwise
+    // selecting the second "Cheshire" right after the first would look
+    // unchanged and never get reposted.
+    const key = text + ':' + (occurrence || '');
+    if (key === trackerNotifiedSelection) return;
+    trackerNotifiedSelection = key;
+    const qs = occurrence && occurrence > 1 ? '?occurrence=' + occurrence : '';
+    fetch(trackerReadyUrl + '__neo-selection' + qs, { method: 'POST', body: text }).catch(() => {});
   }, 300);
 }
 document.addEventListener('selectionchange', notifyTrackerOfSelection);
@@ -8335,7 +8359,7 @@ async function checkTrackerGoto() {
   try { body = await (await fetch(trackerReadyUrl + '__tracker-goto')).json(); } catch { return; }
   const g = body && body.goto;
   if (!g || typeof g.chapter !== 'number') return;
-  jumpToTrackerGoto(g.chapter, g.quote);
+  jumpToTrackerGoto(g.chapter, g.quote, g.occurrence);
 }
 
 // The reverse of chapterNumber() above: which chapter in the open book has
@@ -8352,7 +8376,7 @@ function chapterIdForNumber(n) {
 // not" depending purely on how quickly the next jump happened to land.
 let trackerJumpHighlightTimer = null;
 
-function jumpToTrackerGoto(n, quote) {
+function jumpToTrackerGoto(n, quote, occurrence) {
   const chId = chapterIdForNumber(n);
   if (!chId) { toast(t("Chapter not found in the open manuscript.")); return; }
   // Used to close the pane here so the manuscript wasn't hidden behind it —
@@ -8375,11 +8399,22 @@ function jumpToTrackerGoto(n, quote) {
   // Case-insensitive, matching findRanges' own convention (Find & Replace) —
   // a quote's case shouldn't be the reason it can't be found.
   const text = bodyPlainText(body);
-  const idx = text.toLowerCase().indexOf(clean.toLowerCase());
-  if (idx === -1) {
+  const needle = clean.toLowerCase();
+  const haystack = text.toLowerCase();
+  // Collect every match rather than stopping at the first — occurrence
+  // picks which one (1 = the first, matching how most references don't
+  // carry an occurrence at all and mean exactly that). Clamped to the
+  // last match still found, not treated as "not found", if the text has
+  // since changed and that many no longer exist.
+  const matches = [];
+  for (let at = haystack.indexOf(needle); at !== -1; at = haystack.indexOf(needle, at + 1)) {
+    matches.push(at);
+  }
+  if (matches.length === 0) {
     toast(t("Landed on the chapter — couldn't pinpoint the exact passage."));
     return;
   }
+  const idx = matches[Math.min((occurrence || 1) - 1, matches.length - 1)];
   const startR = textPosToRange(body, idx);
   const endR = textPosToRange(body, idx + clean.length);
   if (!startR || !endR) return;
@@ -8906,6 +8941,21 @@ function textPosToRange(body, pos) {
     acc += len;
   }
   return null;
+}
+
+// The reverse of textPosToRange above: given a text node + offset inside
+// it (a live Selection's own startContainer/startOffset, say), find how
+// far into bodyPlainText(body) that point falls. Same TreeWalker-over-
+// text-nodes approach, just stopping at the matching node instead of a
+// target length.
+function rangeToTextPos(body, node, offset) {
+  const w = document.createTreeWalker(body, NodeFilter.SHOW_TEXT);
+  let n, acc = 0;
+  while ((n = w.nextNode())) {
+    if (n === node) return acc + offset;
+    acc += n.textContent.length;
+  }
+  return -1;
 }
 
 // Where in the chapter does this darling belong?
