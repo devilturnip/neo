@@ -2810,6 +2810,9 @@ async function chapterMenu(chId, x = 0, y = 0, from = null) {
   }
   snapshotStructure('chapter kind');
   setChapterKind(chId, choice);
+  // a part or a page leaves the story's count, and a chapter coming back
+  // joins it again: no word was written or cut, so today doesn't move (#436)
+  wordsFromDisk();
   // a copyright page starts with what every copyright page says
   if (choice === 'copyright' && !chapterText(chId).trim()) {
     chapterHTML[chId] = copyrightStarter();
@@ -2844,6 +2847,21 @@ document.addEventListener('drop', () => { setTimeout(() => { dragFromInside = fa
 let lastRealKeyAt = 0;
 if (IS_POCKET) document.addEventListener('keydown', (e) => { if (e.keyCode !== 229 && e.key !== 'Unidentified') lastRealKeyAt = Date.now(); }, true);
 
+// ---- typing style rules: what ⌘B, ⌘I, ⌘U and ⌘⇧S leave at the caret (#430) ----
+// Turned on or off with nothing selected, they style only the letters typed
+// next, and the engine forgets that as soon as the selection is set again,
+// even to the same place. move sets it; whatever it undid is turned back,
+// and the commands that had to be run again are returned.
+const TYPING_STYLES = ['bold', 'italic', 'underline', 'strikeThrough'];
+function keepTypingStyle(doc, move) {
+  const was = TYPING_STYLES.map((cmd) => doc.queryCommandState(cmd));
+  move();
+  const back = TYPING_STYLES.filter((cmd, i) => doc.queryCommandState(cmd) !== was[i]);
+  for (const cmd of back) doc.execCommand(cmd);
+  return back;
+}
+// ---- end of typing style rules ----
+
 function wireChapterBody(body, chId) {
   body.addEventListener('focus', () => { currentChapterId = chId; updateCounters(); highlightNav(); });
 
@@ -2858,7 +2876,11 @@ function wireChapterBody(body, chId) {
       if (composing || document.activeElement !== body) return;
       const sel = window.getSelection();
       if (!sel.rangeCount || !sel.isCollapsed || !body.contains(sel.anchorNode)) return;
-      sel.collapse(sel.anchorNode, sel.anchorOffset);
+      // setting the caret again also drops what ⌘I or ⌘B just turned on or
+      // off for the next letters, so they come back with it (#430)
+      const sc = $('#paper-scroll');
+      const keep = sc.scrollTop;
+      if (keepTypingStyle(document, () => sel.collapse(sel.anchorNode, sel.anchorOffset)).length) sc.scrollTop = keep;
     }, 1000);
   };
   body.addEventListener('input', () => {
@@ -3860,10 +3882,15 @@ function handleEnter(e, body, chId) {
   if (prev) {
     e.preventDefault();
     snapshotStructure('section break', { rejoin: enterRun >= 2 });
-    block.removeAttribute('style'); // (see above: a break carries nothing over)
+    // the line under the break is set as the one it was made in, the way
+    // Enter carries a paragraph's alignment (a third Enter takes it on into
+    // the next chapter); the break itself carries nothing (see above)
+    const align = block.style.textAlign;
+    block.removeAttribute('style');
     block.className = 'scene-break';
     block.textContent = '***';
     const np = document.createElement('p');
+    if (align) np.style.textAlign = align;
     np.innerHTML = '<br>';
     block.after(np);
     const range = document.createRange();
@@ -4693,26 +4720,9 @@ function smartKeys(e, body) {
   }
   if (e.key === '"' || e.key === "'") {
     e.preventDefault();
-    const before = prevChars(1);
-    const q = e.key === '"' ? bookQuotes(body) : quoteStyle();
-    let opening = before === '' || /[\s\(\[\{‘“«„‚»›‹>]/.test(before);
-    // after a dash, a quote usually closes speech that was cut off ("I was
-    // just—"); it opens one only when no quotation is open in the paragraph
-    if (before === '—' || before === '–') opening = !quoteIsOpen(range, e.key === '"' ? q : { open: '‘', close: '’' }, e.key === '"' ? '"' : '');
-    let ch;
-    if (e.key === "'") {
-      // most languages type ' as an apostrophe only; English, Dutch and
-      // German also open (and German closes) single quotes with it
-      const sq = singleQuotes(body);
-      if (!sq) ch = '’';
-      else if (opening) ch = sq.open;
-      // German's closing mark isn't its apostrophe: it closes only a single
-      // quotation that is open in the paragraph
-      else if (sq.close !== '’' && quoteIsOpen(range, sq, '')) ch = sq.close;
-      else ch = '’';
-    } else {
-      ch = opening ? q.open : q.close;
-    }
+    const double = e.key === '"';
+    const ch = typedQuote(e.key, prevChars(8), double ? bookQuotes(body) : null, double ? null : singleQuotes(body),
+      (q, straight) => quoteIsOpen(range, q, straight));
     document.execCommand('insertText', false, ch);
   }
 }
@@ -4747,6 +4757,40 @@ function quoteOpenIn(text, q, straight = '') {
     }
   }
   return depth > 0 || straights % 2 === 1;
+}
+
+// What a typed " or ' becomes. before: the text just before the caret (in
+// its text node); q: the double marks, sq: the single ones (null where '
+// is only an apostrophe); isOpen(marks, straight): is a quotation in those
+// marks open in the paragraph so far (quoteIsOpen).
+function typedQuote(key, before, q, sq, isOpen) {
+  const last = before.slice(-1);
+  let opening = quoteOpensAfter(before);
+  // after a dash, a quote usually closes speech that was cut off ("I was
+  // just—"); it opens one only when no quotation is open in the paragraph
+  if (last === '—' || last === '–') opening = !isOpen(key === '"' ? q : { open: '‘', close: '’' }, key === '"' ? '"' : '');
+  if (key === '"') return opening ? q.open : q.close;
+  // most languages type ' as an apostrophe only; English, Dutch and
+  // German also open (and German closes) single quotes with it
+  if (!sq) return '’';
+  if (opening) return sq.open;
+  // German's closing mark isn't its apostrophe: it closes only a single
+  // quotation that is open in the paragraph
+  if (sq.close !== '’' && isOpen(sq, '')) return sq.close;
+  return '’';
+}
+// Does a quote typed after this text open one? At the start, after a space
+// or a bracket, or after an opening mark (»› and „‚ nest), it does. But
+// ‘ “ « » › ‹ open in some languages and close in others: German »…›…‹«
+// and „…‚…‘“ close with the marks English and Swiss writing open with. So
+// a run of them faces the way the text before it says: after a word or
+// its punctuation (or French's narrow space before »), they closed a
+// quotation, and the quote typed next closes the one around it (#410).
+function quoteOpensAfter(before) {
+  let i = before.length;
+  while (i > 0 && /[‘“«»›‹]/.test(before[i - 1])) i--;
+  if (i === before.length) return before === '' || /[\s([{„‚>]/.test(before[i - 1]);
+  return !/[\p{L}\p{N}\p{M}.,;:!?…)\]}’”\u202f]/u.test(before[i - 1] || '');
 }
 
 // The quotation marks of the language being written: the spellcheck
@@ -5397,18 +5441,59 @@ document.addEventListener('keydown', (e) => {
   window.neo.fullscreenEscape();
 });
 
-// ⌘Enter (Ctrl+Enter): toggle fullscreen from anywhere
+// ---- full screen keys: ⌘Enter (Ctrl+Enter) everywhere, and F11 off the Mac,
+// where most programs use it (on a Mac, F11 shows the desktop)
+function isFullScreenKey(e, mac) {
+  if (e.key === 'F11') return !mac && !e.repeat && !(e.metaKey || e.ctrlKey || e.shiftKey || e.altKey);
+  return e.key === 'Enter' && (e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey;
+}
+// ---- end of full screen keys ----
+
+// toggle fullscreen from anywhere
 document.addEventListener('keydown', (e) => {
-  if (e.key !== 'Enter' || !(e.metaKey || e.ctrlKey) || e.shiftKey || e.altKey) return;
+  if (!isFullScreenKey(e, IS_MAC)) return;
   if (document.querySelector('.modal-backdrop:not([hidden])')) return;
   e.preventDefault();
   window.neo.fullscreenToggle();
 });
 
+// ---- carried alignment rules: a new chapter opens set as the story is (#426) ----
+// The alignment most of a chapter's prose is set in: '' for left (NEO's
+// default), null for a chapter with no prose yet. Breaks, outline ghosts,
+// poetry, flush lines, script lines and empty lines don't count. A tie goes
+// to the later paragraph.
+function chapterAlign(html) {
+  const count = {};
+  let best = null;
+  for (const m of String(html || '').matchAll(/<p\b([^>]*)>([\s\S]*?)<\/p>/g)) {
+    const cls = (/\bclass="([^"]*)"/.exec(m[1]) || [])[1] || '';
+    if (/(^|\s)(scene-break|ghost|poetry|flush|sp-[\w-]+)(\s|$)/.test(cls)) continue;
+    if (!m[2].replace(/<[^>]*>|&nbsp;|\s/g, '')) continue;
+    let a = (/text-align:\s*([a-z]+)/.exec(m[1]) || [])[1] || '';
+    if (!['center', 'right', 'justify'].includes(a)) a = '';
+    count[a] = (count[a] || 0) + 1;
+    if (best === null || count[a] >= count[best]) best = a;
+  }
+  return best;
+}
+// A new chapter's empty first line, set the way the nearest story with
+// words in it is: the chapters before it first, then the ones after (a new
+// first chapter). Pages such as a dedication or a part are passed over.
+function newChapterHtml(order, at, htmlOf, story) {
+  for (const c of [...order.slice(0, at).reverse(), ...order.slice(at)]) {
+    const a = story(c) ? chapterAlign(htmlOf(c)) : null;
+    if (a !== null) return a ? `<p style="text-align: ${a};"><br></p>` : '<p><br></p>';
+  }
+  return '<p><br></p>';
+}
+// ---- end of carried alignment rules ----
+
 function createChapterAt(idx) {
   const chId = 'ch-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 6);
+  // (from the order as it stands, before the new chapter joins it)
+  const first = isScript() ? '<p><br></p>' : newChapterHtml(book.chapterOrder, idx, (c) => chapterHTML[c], (c) => isStory(c));
   book.chapterOrder.splice(idx, 0, chId);
-  chapterHTML[chId] = '<p><br></p>';
+  chapterHTML[chId] = first;
   persistChapter(chId);
   saveMeta();
   renderChapters();
@@ -13968,9 +14053,18 @@ async function structuralUndo(fromRedo) {
       displaced.push({ chId, html: cur });
     }
   }
+  // an action that only changed what a chapter is moved the story's count
+  // with no word written or cut, and so does taking it back (#436)
+  const kindNow = book.chapterKinds || {};
+  const kindsOnly = [...new Set([...Object.keys(kindNow), ...Object.keys(snap.chapterKinds || {})])].some((c) => kindNow[c] !== (snap.chapterKinds || {})[c])
+    && book.chapterOrder.length === snap.chapterOrder.length
+    && book.chapterOrder.every((c, i) => c === snap.chapterOrder[i])
+    && Object.keys(chapterHTML).length === Object.keys(restored).length
+    && Object.keys(restored).every((c) => restored[c] === chapterHTML[c]);
   book.chapterOrder = snap.chapterOrder;
   book.chapterKinds = snap.chapterKinds;
   chapterHTML = restored;
+  if (kindsOnly) wordsFromDisk();
   for (const { chId, html } of displaced) {
     const holder = document.createElement('div');
     holder.innerHTML = html;
@@ -14369,24 +14463,83 @@ function searchRoots() {
   return [$('#aux-editor')];
 }
 
+// ---- find's matching: a paragraph is read as one string, so a phrase that
+// runs into italic or bold, or a word an import split across runs, is found
+// even though its letters sit in several text nodes
+
+// lower case of the same length, so an offset in it is an offset in s
+// ('İ' lowers to two characters and is left as it is)
+function lowerSameLength(s) {
+  const l = s.toLowerCase();
+  if (l.length === s.length) return l;
+  let out = '';
+  for (const c of s) { const lc = c.toLowerCase(); out += lc.length === c.length ? lc : c; }
+  return out;
+}
+
+// every place q appears in texts read end to end, any case, as
+// { from: [node, offset], to: [node, offset] } with to's offset exclusive
+function matchSpans(texts, q) {
+  const found = [];
+  if (!q || !texts.length) return found;
+  const ql = lowerSameLength(q);
+  const all = lowerSameLength(texts.join(''));
+  const starts = [];
+  let at = 0;
+  for (const t of texts) { starts.push(at); at += t.length; }
+  // the node holding the character at i
+  const nodeAt = (i) => {
+    let n = 0;
+    while (n + 1 < starts.length && starts[n + 1] <= i) n++;
+    return n;
+  };
+  let pos = 0;
+  while ((pos = all.indexOf(ql, pos)) !== -1) {
+    const a = nodeAt(pos);
+    const b = nodeAt(pos + q.length - 1);
+    found.push({ from: [a, pos - starts[a]], to: [b, pos + q.length - starts[b]] });
+    pos += q.length;
+  }
+  return found;
+}
+// ---- end of find's matching ----
+
+// a run ends at a paragraph's edge, and around a footnote or placeholder
+// flag (contenteditable="false"), so a Replace never deletes one
+const FIND_BLOCKS = 'p, div, li, h1, h2, h3, h4, h5, h6, blockquote, pre, td, th, [contenteditable="false"]';
+
+// a root's text nodes, cut into the runs one match may cross: a run ends at
+// a paragraph's edge or a line break, never at an <em> or a <strong>
+function textRuns(root) {
+  const runs = [];
+  let run = null;
+  let block = null;
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT);
+  let node;
+  while ((node = walker.nextNode())) {
+    if (node.nodeType !== Node.TEXT_NODE) {
+      if (node.tagName === 'BR') run = null;
+      continue;
+    }
+    const b = node.parentElement.closest(FIND_BLOCKS);
+    if (!run || b !== block) { run = []; runs.push(run); block = b; }
+    run.push(node);
+  }
+  return runs;
+}
+
 // every place q appears in the tab, in reading order, any case
 function findRanges(q) {
   const found = [];
   if (!q) return found;
-  const ql = q.toLowerCase();
   for (const body of searchRoots()) {
     if (!body) continue;
-    const walker = document.createTreeWalker(body, NodeFilter.SHOW_TEXT);
-    let node;
-    while ((node = walker.nextNode())) {
-      const tl = node.textContent.toLowerCase();
-      let pos = 0;
-      while ((pos = tl.indexOf(ql, pos)) !== -1) {
+    for (const run of textRuns(body)) {
+      for (const m of matchSpans(run.map((n) => n.textContent), q)) {
         const range = document.createRange();
-        range.setStart(node, pos);
-        range.setEnd(node, pos + q.length);
+        range.setStart(run[m.from[0]], m.from[1]);
+        range.setEnd(run[m.to[0]], m.to[1]);
         found.push(range);
-        pos += q.length;
       }
     }
   }
@@ -14426,6 +14579,23 @@ function freshSearchIfStale() {
   if (searchState.query !== $('#search-input').value || searchState.tab !== currentTab) runSearch();
 }
 
+// put rep where a match was. A match across formatting takes the formatting
+// of its first letter, and an <em> or <strong> it leaves empty goes with it.
+function replaceRange(range, rep) {
+  const { startContainer: a, startOffset: from, endContainer: b, endOffset: to } = range;
+  if (a === b) { a.replaceData(from, to - from, rep); return; }
+  const top = range.commonAncestorContainer;
+  range.deleteContents();
+  a.insertData(from, rep);
+  let el = b.parentElement;
+  if (!b.data) b.remove();
+  while (el && el !== top && !el.textContent && !el.querySelector('br, img')) {
+    const up = el.parentElement;
+    el.remove();
+    el = up;
+  }
+}
+
 function replaceCurrent() {
   if (currentTab !== 'manuscript') return;
   freshSearchIfStale();
@@ -14441,8 +14611,7 @@ function replaceCurrent() {
     chapter = m.range.startContainer.parentElement.closest('.chapter');
     snapshotStructure('replace');
     breakRun++; // the engine never saw this change: ⌘Z goes to NEO's undo
-    m.range.deleteContents();
-    if (rep) m.range.insertNode(document.createTextNode(rep));
+    replaceRange(m.range, rep);
   } catch {
     runSearch();
     return;
@@ -14459,23 +14628,16 @@ function replaceAllMatches() {
   if (!q || currentTab !== 'manuscript') return;
   snapshotStructure('replace all');
   const rep = $('#replace-input').value;
-  const re = new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
-  let n = 0;
+  // the matches Find shows, last first, so a replacement never moves one still to come
+  const ranges = findRanges(q).reverse();
+  const touched = new Set();
+  for (const range of ranges) {
+    touched.add(range.startContainer.parentElement.closest('.chapter').dataset.id);
+    replaceRange(range, rep);
+  }
+  const n = ranges.length;
   for (const chId of book.chapterOrder) {
-    const body = document.querySelector(`.chapter[data-id="${chId}"] .chapter-body`);
-    if (!body) continue;
-    const nodes = [];
-    const walker = document.createTreeWalker(body, NodeFilter.SHOW_TEXT);
-    let node;
-    while ((node = walker.nextNode())) nodes.push(node);
-    let touched = false;
-    for (const nd of nodes) {
-      if (nd.textContent.toLowerCase().includes(q.toLowerCase())) {
-        nd.textContent = nd.textContent.replace(re, () => { n++; return rep; });
-        touched = true;
-      }
-    }
-    if (touched) syncChapter(body, chId);
+    if (touched.has(chId)) syncChapter(document.querySelector(`.chapter[data-id="${chId}"] .chapter-body`), chId);
   }
   if (n === 0) undoStack.pop(); // nothing changed, nothing to undo
   else breakRun++; // ⌘Z from inside the text reaches this undo too
@@ -15872,7 +16034,7 @@ function bookShortcutSections() {
       [K('⌘E', 'Ctrl+E'), tk('Email a draft to yourself')]
     ] },
     { title: tk('View & window'), rows: [
-      [[K('⌘⇧F', 'Ctrl+Shift+F'), K('⌘Enter', 'Ctrl+Enter')], tk('Toggle full screen')],
+      [[K('⌘⇧F', 'Ctrl+Shift+F'), K('⌘Enter', 'Ctrl+Enter'), ...(IS_MAC ? [] : ['F11'])], tk('Toggle full screen')],
       [K('⌘⇧T', 'Ctrl+Shift+T'), tk('Toggle typewriter scrolling')],
       ...(more ? [[K('⌘⇧O', 'Ctrl+Shift+O'), tk('Cycle focus mode'), tk('Off → paragraph → sentence → off.')]] : []),
       [IS_MAC ? '⌥⌘↓' : ['Ctrl+Alt+↓', 'Ctrl+Page Down'], tk('Go to the next chapter')],

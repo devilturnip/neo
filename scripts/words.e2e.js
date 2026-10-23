@@ -449,6 +449,36 @@ test('the other computer counting more today is taken in, and typing adds to it'
   assert.equal(await text('goal-counter'), '301 today');
 });
 
+// A part isn't the story's words, so making a chapter one takes its words out
+// of the count and back makes them count again: neither is writing (#436).
+test('a chapter made a part, and back, adds nothing to today', async () => {
+  const id = await shelvedBook('Parts', TWO);
+  await open(id);
+  assert.equal(await text('goal-counter'), '0 today');
+  const second = await js('book.chapterOrder[1]');
+  const makeIt = (kind) => js(`(async () => {
+    const real = window.popMenu;
+    window.popMenu = async () => ${JSON.stringify(kind)};
+    try { await chapterMenu(${JSON.stringify(second)}, 10, 10); } finally { window.popMenu = real; }
+  })()`);
+  await makeIt('part');
+  assert.equal(await js('bookWordCount()'), 60);
+  assert.equal(await text('goal-counter'), '0 today');
+  await makeIt('chapter');
+  assert.equal(await js('bookWordCount()'), 2060);
+  assert.equal(await text('goal-counter'), '0 today');
+  // taking the change back (⌘Z) and doing it again (⇧⌘Z) is no writing either
+  await makeIt('part');
+  await js('structuralUndo()');
+  await tick(400);
+  assert.equal(await js('bookWordCount()'), 2060);
+  assert.equal(await text('goal-counter'), '0 today');
+  await js('structuralRedo()');
+  await tick(400);
+  assert.equal(await js('bookWordCount()'), 60);
+  assert.equal(await text('goal-counter'), '0 today');
+});
+
 /* ---------- runner ---------- */
 
 async function main() {
