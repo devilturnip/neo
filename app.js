@@ -5497,31 +5497,8 @@ function createChapterAt(idx) {
   persistChapter(chId);
   saveMeta();
   renderChapters();
-  // The one shared place every interactive "make a new chapter" gesture
-  // goes through (3-Enter split, the Chapters pane's +, Outline's Enter/
-  // Shift+Tab, the card view's +Chapter) — not file import or sync/undo
-  // mechanics, which build chapter ids by hand instead of calling this.
-  notifyTrackerOfNewChapter(chId);
+  window.neoHooks?.chapterCreated?.(chId); // litrpg-tracker (tracker-bridge.js)
   return chId;
-}
-
-// Opens the tracker panel and its own "New chapter" dialog, prefilled with
-// the chapter number NEO just gave this chapter — fire-and-forget, same
-// reasoning as sendTrackerIntent below (createChapterAt itself must stay
-// synchronous for its many existing callers).
-function notifyTrackerOfNewChapter(chId) {
-  void (async () => {
-    // The pane opens here with the mouse wherever the author's typing left
-    // it — almost never over the pane itself — so the mousemove auto-close
-    // listener (see its comment above) would otherwise close it again the
-    // instant it next fires, often before the dialog has even loaded.
-    // trackerFlowActive holds it open the same way the right-click "Add to
-    // the tracker" flow does, until the cursor genuinely moves over it.
-    trackerFlowActive = true;
-    await openTrackerPane();
-    if (!trackerReadyUrl) { trackerFlowActive = false; return; } // tracker not available — nothing to do
-    await sendTrackerIntent('chapter-create', String(chapterNumber(chId)));
-  })();
 }
 
 function newChapter() {
@@ -7645,7 +7622,8 @@ function markCurrentSticky(sid) {
 }
 
 function focusSticky(sid) {
-  openSidePane();
+  $('#side-pane').classList.add('open');
+  window.neoHooks?.stickyFocused?.(); // litrpg-tracker (tracker-bridge.js)
   const el = document.querySelector(`.sticky[data-sid="${sid}"] textarea`);
   if (!el) return;
   markCurrentSticky(sid);
@@ -8009,31 +7987,20 @@ function scheduleNavRefresh() {
 // Hover behavior for both side panes:
 function wireHoverPane(hotzone, pane, isPinnable) {
   // (a menu opened from the Chapters pane keeps it open while it's up)
-  // the tracker iframe is a genuinely separate renderer: crossing its
-  // boundary fires a spurious mouseleave on the pane in Chromium, which
-  // would otherwise close the pane out from under every click attempt —
-  // treated as pinned while in tracker mode so hover alone can't close it;
-  // clicking outside (the mousedown listener below) still does
-  const pinned = () => (isPinnable && pane.dataset.pinned === '1') ||
+  const pinned = () => (isPinnable && pane.dataset.pinned === '1') || !!window.neoHooks?.paneLocked?.(pane, 'hover') || // litrpg-tracker (tracker-bridge.js)
     (pane.id === 'nav-pane' && (chapterDragActive || !!document.querySelector('.pop-menu'))) ||
-    (pane.id === 'side-pane' && ($('#editor-view').classList.contains('darlings-tab') || pane.dataset.mode === 'tracker')); // the snapshots stay; so does the tracker, for the reason above
-  // this hover mechanism only ever opens the side pane in tracker mode — a
-  // mouseleave reaching here while some OTHER mode is showing (Stickies,
-  // switched to by its own button) is a stale event from the mouse's
-  // earlier travel away from the hotzone, not a real request to close
-  // whatever's showing now
-  const hoverOwnsThis = () => pane.id !== 'side-pane' || pane.dataset.mode === 'tracker';
+    (pane.id === 'side-pane' && $('#editor-view').classList.contains('darlings-tab')); // the snapshots stay
   hotzone.addEventListener('mouseenter', (e) => {
     if (e.buttons) return; // dragging something — stand down
     pane.classList.add('open');
   });
   hotzone.addEventListener('mouseleave', (e) => {
-    if (!hoverOwnsThis() || pinned()) return;
+    if (pinned()) return;
     if (e.relatedTarget && pane.contains(e.relatedTarget)) return;
     pane.classList.remove('open');
   });
   pane.addEventListener('mouseleave', () => {
-    if (!hoverOwnsThis() || pinned()) return;
+    if (pinned()) return;
     pane.classList.remove('open');
   });
 }
@@ -8049,45 +8016,13 @@ $('#nav-pane').addEventListener('dragleave', (e) => {
   if (e.relatedTarget && (pane.contains(e.relatedTarget) || e.relatedTarget.id === 'nav-hotzone')) return;
   pane.classList.remove('open');
 });
-// the litrpg-tracker panel opens the same way Notes & Comments used to:
-// hovering the right edge. Registered before wireHoverPane's own listener so
-// the mode (and the aria-label) is set before .open paints the pane open.
-let trackerPaneOpenedAt = 0;
-// Set for the duration of the right-click "Add to the tracker" flow (further
-// down) — while true, the mousemove listener below never closes the pane,
-// since that flow's own pop-menus render at the click position (usually out
-// in the manuscript, not over the pane) and the cursor never has to be over
-// the pane just to pick a character. Cleared the moment the cursor is
-// actually seen inside the pane (the user looking at the dialog that just
-// opened), which hands auto-close back to normal; a deliberate click
-// elsewhere still closes it regardless (see the mousedown listener below).
-let trackerFlowActive = false;
-// Shared by the hover gesture below and the right-click "Add to the
-// tracker" menu (further down) — either one puts the pane in tracker mode
-// and gets the dev server starting, without waiting on it.
-function openTrackerPane() {
-  const pane = $('#side-pane');
-  pane.dataset.mode = 'tracker';
-  pane.setAttribute('aria-label', t('litrpg-tracker'));
-  pane.classList.add('open');
-  trackerPaneOpenedAt = Date.now(); // the slide-in transition takes 0.18s — see the mousemove listener below
-  rememberPinnedSideMode();
-  // Otherwise the Outline cards preview can sit there stale, stacked above
-  // the tracker, until the next selection change happens to clear it.
-  sideCardsUpdate(true);
-  return ensureTrackerPane();
-}
-$('#side-hotzone').addEventListener('mouseenter', (e) => {
-  if (e.buttons) return; // dragging something — stand down, same guard wireHoverPane uses
-  openTrackerPane();
-});
 wireHoverPane($('#side-hotzone'), $('#side-pane'), true);
+
 // leaving the window closes unpinned panes (they used to stick open)
 function closeUnpinnedPanes() {
   // Wayland can blur the window as a native chapter drag begins.
   if (!chapterDragActive && $('#nav-pane').dataset.pinned !== '1') $('#nav-pane').classList.remove('open');
-  const side = $('#side-pane');
-  if (side.dataset.pinned !== '1' && !$('#editor-view').classList.contains('darlings-tab') && side.dataset.mode !== 'tracker') closeSidePane();
+  if ($('#side-pane').dataset.pinned !== '1' && !$('#editor-view').classList.contains('darlings-tab') && !window.neoHooks?.paneLocked?.($('#side-pane'), 'blur')) $('#side-pane').classList.remove('open'); // litrpg-tracker (tracker-bridge.js)
 }
 document.documentElement.addEventListener('mouseleave', closeUnpinnedPanes);
 window.addEventListener('blur', closeUnpinnedPanes);
@@ -8112,33 +8047,9 @@ function pinPane(side, on, key = side) {
   pin.setAttribute('aria-pressed', on ? 'true' : 'false');
   $('#editor-view').classList.toggle(side + '-pinned', on);
   if (on) pane.classList.add('open');
-  if (side === 'side') {
-    const open = pane.classList.contains('open');
-    $('#side-pane-toggle').classList.toggle('active', open);
-    $('#side-pane-toggle').setAttribute('aria-pressed', open ? 'true' : 'false');
-  }
   try {
     const kept = JSON.parse(localStorage.getItem('neo-pinned-panes') || '{}');
     kept[key] = on;
-    localStorage.setItem('neo-pinned-panes', JSON.stringify(kept));
-  } catch { /* fine: it just won't be remembered */ }
-  // Pinning the side pane usually happens after it's already open (hover
-  // it open, then click Keep Open) — capture whatever mode it's showing
-  // right now, not just whether it's pinned.
-  if (side === 'side' && on) rememberPinnedSideMode();
-}
-// The side pane has more than one thing it can show (the tracker, Notes &
-// Comments) — pinning it only remembers *that* it's open, not which, so a
-// pin left on the tracker reopened to Notes & Comments at next launch
-// instead. Called whenever the pane's content changes (openTrackerPane,
-// openSidePane) so the saved mode always matches what's actually on screen,
-// not just whatever it was when the pin was first clicked.
-function rememberPinnedSideMode() {
-  const pane = $('#side-pane');
-  if (pane.dataset.pinned !== '1') return;
-  try {
-    const kept = JSON.parse(localStorage.getItem('neo-pinned-panes') || '{}');
-    kept.sideMode = pane.dataset.mode || '';
     localStorage.setItem('neo-pinned-panes', JSON.stringify(kept));
   } catch { /* fine: it just won't be remembered */ }
 }
@@ -8148,446 +8059,9 @@ if (!NO_HOVER) {
   try {
     const kept = JSON.parse(localStorage.getItem('neo-pinned-panes') || '{}');
     if (kept.nav) pinPane('nav', true);
-    if (kept.side) {
-      if (kept.sideMode === 'tracker') openTrackerPane();
-      pinPane('side', true);
-    }
+    if (kept.side) pinPane('side', true);
   } catch { /* nothing kept */ }
 }
-
-// "Full screen" for the tracker: an overlay you step into and back out of
-// (see the CSS comment on [data-wide="1"]) — unlike pinPane above, this
-// never forces the pane open on its own; it only changes how big the pane
-// gets while something else (hover, pin, the right-click flow) has it open.
-function setTrackerWide(on) {
-  const pane = $('#side-pane');
-  pane.dataset.wide = on ? '1' : '0';
-  $('#side-wide').classList.toggle('on', on);
-  $('#side-wide').setAttribute('aria-pressed', on ? 'true' : 'false');
-  try {
-    const kept = JSON.parse(localStorage.getItem('neo-pinned-panes') || '{}');
-    kept.trackerWide = on;
-    localStorage.setItem('neo-pinned-panes', JSON.stringify(kept));
-  } catch { /* fine: it just won't be remembered */ }
-}
-$('#side-wide').onclick = () => setTrackerWide($('#side-pane').dataset.wide !== '1');
-if (!NO_HOVER) {
-  try {
-    const kept = JSON.parse(localStorage.getItem('neo-pinned-panes') || '{}');
-    if (kept.trackerWide) setTrackerWide(true);
-  } catch { /* nothing kept */ }
-}
-
-// The side pane (Notes & Comments) opens from this bottombar button instead
-// of a right-edge hover, so the right edge is free for other things.
-function openSidePane() {
-  const pane = $('#side-pane');
-  pane.dataset.mode = 'stickies';
-  pane.setAttribute('aria-label', t('Notes & Comments'));
-  pane.classList.add('open');
-  sideCardsUpdate(true); // the "cards beside the page" preview, same as the old hover used to trigger
-  $('#side-pane-toggle').classList.add('active');
-  $('#side-pane-toggle').setAttribute('aria-pressed', 'true');
-  rememberPinnedSideMode();
-}
-function closeSidePane() {
-  $('#side-pane').classList.remove('open');
-  $('#side-pane-toggle').classList.remove('active');
-  $('#side-pane-toggle').setAttribute('aria-pressed', 'false');
-}
-$('#side-pane-toggle').onclick = () => {
-  const pane = $('#side-pane');
-  // open in some OTHER mode (the tracker, now that it can stay open while
-  // you work in it) switches to stickies rather than just closing it
-  if (pane.classList.contains('open') && pane.dataset.mode === 'stickies') closeSidePane();
-  else openSidePane();
-};
-// a click outside the (unpinned) open pane closes it, the way a pop-menu does
-document.addEventListener('mousedown', (e) => {
-  const pane = $('#side-pane');
-  if (!pane.classList.contains('open') || pane.dataset.pinned === '1') return;
-  if ($('#editor-view').classList.contains('darlings-tab')) return; // snapshots stay
-  if (pane.contains(e.target) || e.target.closest('#side-pane-toggle')) return;
-  // a pop-menu (e.g. the right-click "Add to the tracker" action/character
-  // pickers) renders at document.body, not inside #side-pane, at whatever
-  // position the triggering click happened — so picking an item in one
-  // reads as "clicked outside the pane" here and would otherwise close it
-  // out from under the flow this click is part of.
-  if (e.target.closest('.pop-menu')) return;
-  closeSidePane();
-}, true);
-
-// The litrpg-tracker panel: a live view of its own dev server, embedded as
-// an iframe in #tracker-pane-body (the pane's tracker-mode content). The
-// pane itself opens immediately on hover regardless of load state — this
-// only gates the iframe's own creation/loading.
-let trackerFrame = null;
-let trackerReadyUrl = null;
-let trackerPanePromise = null;
-function ensureTrackerPane() {
-  if (trackerPanePromise) return trackerPanePromise;
-  trackerPanePromise = (async () => {
-    const result = await window.neo.trackerEnsure();
-    const body = $('#tracker-pane-body');
-    if (!result.ok) {
-      body.textContent = t('Tracker not available') + (result.reason === 'missing-repo' ? '' : ' (' + result.reason + ')');
-      trackerPanePromise = null; // let the next hover try again
-      return;
-    }
-    // a trailing slash matters for the URLs built from this below
-    trackerReadyUrl = result.url.replace(/\/?$/, '/');
-    notifyTrackerOfChapter(true); // the dev server is up — post the current chapter now, so it's already there the moment the page's own poll starts (no need to wait on the iframe's load)
-    if (!trackerFrame) {
-      trackerFrame = document.createElement('iframe');
-      trackerFrame.id = 'tracker-frame';
-      // Cross-origin iframes don't inherit clipboard access by default —
-      // without this, its own "Copy" buttons call navigator.clipboard.
-      // writeText() and it silently fails (NotAllowedError, swallowed),
-      // so the button looks like it worked but nothing lands on paste.
-      trackerFrame.allow = 'clipboard-write';
-      body.textContent = ''; // clear any earlier "not available" message
-      body.appendChild(trackerFrame);
-    }
-    // ?embed=neo tells the tracker's own App.tsx to pick its 'neo' theme
-    // scheme (theme.css) — flat, muted, NEO's own palette/font — instead of
-    // its usual Castlevania-pause-menu look
-    const frameSrc = trackerReadyUrl + '?embed=neo';
-    if (trackerFrame.src !== frameSrc) trackerFrame.src = frameSrc;
-  })();
-  return trackerPanePromise;
-}
-
-// Follows the current chapter as the author writes/navigates. This was
-// originally a cross-origin location.href navigation (differing only in the
-// fragment, so the browser treats it as a same-document hash change), then
-// a contentWindow.postMessage() — both reliably hung the renderer in
-// testing. This instead posts to the dev server's own /__neo-chapter
-// endpoint (fire-and-forget, mode:'no-cors' since it's a file://-to-http
-// cross-origin request NEO never needs to read a response from), which
-// litrpg-tracker's App.tsx polls — the same shape as every other write this
-// app already makes to that server. Debounced so rapid scroll-driven
-// chapter changes don't spam requests; skips a redundant post to the same
-// chapter.
-let trackerNotifiedChapter = null;
-let trackerNotifyTimer = null;
-function notifyTrackerOfChapter(immediate) {
-  if (!trackerReadyUrl || !currentChapterId || !book) return;
-  clearTimeout(trackerNotifyTimer);
-  const go = () => {
-    const n = chapterNumber(currentChapterId);
-    if (n === trackerNotifiedChapter) return;
-    trackerNotifiedChapter = n;
-    fetch(trackerReadyUrl + '__neo-chapter?n=' + n, { method: 'POST', mode: 'no-cors' }).catch(() => {});
-  };
-  if (immediate) go();
-  else trackerNotifyTimer = setTimeout(go, 400);
-}
-
-// Same reasoning and shape as notifyTrackerOfChapter above, for the word
-// count of whatever chapter is currently being written — called from
-// updateCounters(), so it rides along with every count refresh rather than
-// needing its own typing listener. Only ever reports the chapter currently
-// open; other chapters' counts stay whatever they were until visited.
-let trackerNotifiedWords = null;
-let trackerNotifyWordsTimer = null;
-function notifyTrackerOfWordCount() {
-  if (!trackerReadyUrl || !currentChapterId || !book) return;
-  clearTimeout(trackerNotifyWordsTimer);
-  trackerNotifyWordsTimer = setTimeout(() => {
-    const n = chapterNumber(currentChapterId);
-    const words = chapterWords(currentChapterId);
-    const key = n + ':' + words;
-    if (key === trackerNotifiedWords) return;
-    trackerNotifiedWords = key;
-    fetch(trackerReadyUrl + '__neo-wordcount?chapter=' + n + '&words=' + words, { method: 'POST', mode: 'no-cors' }).catch(() => {});
-  }, 1000); // typing settles before this fires — no point syncing every keystroke
-}
-
-// NEO's own live manuscript selection, followed into the tracker so a +/-
-// or EditDialog edit made there can tie itself to a sentence in the text —
-// select it here first, then make the edit over in the panel. No explicit
-// Content-Type, so the body defaults to text/plain and the request stays
-// CORS-simple, same reasoning as sendManuscriptText below. Pushes the empty
-// string the moment the selection collapses or moves outside the chapter
-// body, so a stale quote never lingers past the instant it stops being
-// true — unlike the one-shot intents elsewhere on this pane, this is live
-// state, always reflecting whatever's highlighted right now.
-let trackerNotifiedSelection = null;
-let trackerNotifySelectionTimer = null;
-function notifyTrackerOfSelection() {
-  if (!trackerReadyUrl) return;
-  clearTimeout(trackerNotifySelectionTimer);
-  trackerNotifySelectionTimer = setTimeout(() => {
-    const sel = window.getSelection();
-    let el = sel.rangeCount ? sel.anchorNode : null;
-    if (el && el.nodeType === Node.TEXT_NODE) el = el.parentElement;
-    const body = el && el.closest ? el.closest('.chapter-body') : null;
-    const text = body && !sel.isCollapsed ? sel.toString().trim() : '';
-    // Which occurrence of `text` within this chapter the selection's own
-    // start falls at (1 = the first) — so the tracker can tell apart two
-    // references that happen to share the same chapter and quote (the
-    // same short word mentioned twice), and later jump back to the right
-    // one instead of always the first match of that text. Best-effort:
-    // only computed when the selection's start position can be found at
-    // all; nothing downstream requires it.
-    let occurrence = null;
-    if (text) {
-      const range = sel.getRangeAt(0);
-      const pos = rangeToTextPos(body, range.startContainer, range.startOffset);
-      if (pos !== -1) {
-        const plain = bodyPlainText(body).toLowerCase();
-        const needle = text.toLowerCase();
-        let idx = -1, count = 0;
-        while ((idx = plain.indexOf(needle, idx + 1)) !== -1 && idx <= pos) count++;
-        if (count > 0) occurrence = count;
-      }
-    }
-    // Keyed on text+occurrence together, not text alone — otherwise
-    // selecting the second "Cheshire" right after the first would look
-    // unchanged and never get reposted.
-    const key = text + ':' + (occurrence || '');
-    if (key === trackerNotifiedSelection) return;
-    trackerNotifiedSelection = key;
-    const qs = occurrence && occurrence > 1 ? '?occurrence=' + occurrence : '';
-    fetch(trackerReadyUrl + '__neo-selection' + qs, { method: 'POST', body: text }).catch(() => {});
-  }, 300);
-}
-document.addEventListener('selectionchange', notifyTrackerOfSelection);
-
-// Closes the tracker panel once the mouse has genuinely left it — but not
-// via mouseleave, which (per the comment on hoverOwnsThis above) fires the
-// instant the cursor crosses onto the iframe and can't be trusted here.
-// This instead checks real cursor position against the pane's own bounding
-// box on every mousemove the parent document actually receives. That
-// naturally stops firing the moment the cursor enters the iframe (its
-// content never bubbles mouse events up to this document at all), so the
-// last reading just holds "still inside" for as long as the cursor is in
-// there, and resumes — accurately — the instant it's back over our own
-// content. No debounce needed: by the time a mousemove reports the cursor
-// outside the pane, it genuinely is.
-document.addEventListener('mousemove', (e) => {
-  const pane = $('#side-pane');
-  if (pane.dataset.mode !== 'tracker' || !pane.classList.contains('open') || pane.dataset.pinned === '1') return;
-  // the pane's own 0.18s slide-in transition means its rect is still mid-
-  // animation (partly off-screen) for a moment right after opening —
-  // skip the check until that's settled, or it reads as "outside" and
-  // closes the pane an instant after it opened
-  if (Date.now() - trackerPaneOpenedAt < 250) return;
-  const r = pane.getBoundingClientRect();
-  const inside = e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom;
-  if (trackerFlowActive) {
-    if (inside) trackerFlowActive = false; // genuinely engaging with it now — resume normal tracking
-    return; // never auto-close mid-flow (or just after) purely from cursor position
-  }
-  if (!inside) pane.classList.remove('open');
-});
-
-// Posts a one-shot "create this" request for the tracker's own polling to
-// pick up (see notifyTrackerOfChapter above for why this goes through the
-// dev server rather than the iframe directly — the same reasoning applies
-// here, and no-cors/query-string is the same shape for the same reason).
-async function sendTrackerIntent(type, text, owner) {
-  const url = trackerReadyUrl + '__neo-intent?type=' + encodeURIComponent(type)
-    + '&text=' + encodeURIComponent(text) + (owner ? '&owner=' + encodeURIComponent(owner) : '');
-  await fetch(url, { method: 'POST', mode: 'no-cors' }).catch(() => {});
-}
-
-// The whole book's plain text, one entry per chapter — pushed to the
-// tracker every 10 minutes (see the interval below) or right away when its
-// own "Check now" button asks for it (see checkWantsManuscript below), for
-// checking whether a tracker entry's quoted source text still exists where
-// it's filed. chapterText() (used elsewhere for word counts) already
-// handles a chapter whether or not it's the one currently rendered —
-// cloning the live .chapter-body when it is, parsing the cached
-// chapterHTML otherwise — so this just walks every chapter with it. No
-// explicit Content-Type, so fetch defaults to text/plain and the request
-// stays CORS-simple (no preflight) — same reasoning as every other
-// NEO→tracker push, just a body instead of a query string since a whole
-// manuscript won't fit in a URL.
-async function sendManuscriptText() {
-  if (!trackerReadyUrl || !book) return;
-  const chapters = book.chapterOrder.map((chId) => ({
-    number: chapterNumber(chId),
-    text: chapterText(chId),
-  }));
-  await fetch(trackerReadyUrl + '__neo-manuscript-text', {
-    method: 'POST',
-    body: JSON.stringify({ chapters }),
-  }).catch(() => {});
-}
-setInterval(() => { void sendManuscriptText(); }, 600000); // 10 minutes
-
-// The reverse of sendManuscriptText: a pending "send it now" request from
-// the tracker's own "Check now" button, polled the same 1s cadence as
-// checkTrackerGoto just below (same reasoning — cheap enough to just
-// always be running).
-async function checkWantsManuscript() {
-  if (!trackerReadyUrl) return;
-  let body;
-  try { body = await (await fetch(trackerReadyUrl + '__request-manuscript-text')).json(); } catch { return; }
-  if (body && body.wants) void sendManuscriptText();
-}
-
-// Jumping to a log entry's spot in the manuscript: the reverse of the two
-// functions above — everything else in this file pushes to the tracker's
-// dev server, but a log row's jump icon writes a pending request there
-// instead, for NEO to pick up. Nothing here has ever polled the tracker
-// before, so this is a new loop, at the same 1s cadence the tracker's own
-// App.tsx already polls NEO's pushes with. A no-op whenever the pane hasn't
-// been opened yet this session (trackerReadyUrl unset) or there's nothing
-// pending — cheap enough to just always be running, like the dev server
-// probe above.
-setInterval(() => { void checkTrackerGoto(); void checkWantsManuscript(); }, 1000);
-async function checkTrackerGoto() {
-  if (!trackerReadyUrl) return;
-  let body;
-  try { body = await (await fetch(trackerReadyUrl + '__tracker-goto')).json(); } catch { return; }
-  const g = body && body.goto;
-  if (!g || typeof g.chapter !== 'number') return;
-  jumpToTrackerGoto(g.chapter, g.quote, g.occurrence);
-}
-
-// The reverse of chapterNumber() above: which chapter in the open book has
-// this number, if any.
-function chapterIdForNumber(n) {
-  if (!book) return null;
-  return book.chapterOrder.find((chId) => chapterNumber(chId) === n) || null;
-}
-
-// Guards the flash below against its own stale timeout: paging to a new
-// reference before the previous one's 2.5s is up used to still fire that
-// old delete on schedule, wiping out the brand-new highlight early (or
-// instantly, if jumps come fast) — "sometimes it's there, sometimes it's
-// not" depending purely on how quickly the next jump happened to land.
-let trackerJumpHighlightTimer = null;
-
-function jumpToTrackerGoto(n, quote, occurrence) {
-  const chId = chapterIdForNumber(n);
-  if (!chId) { toast(t("Chapter not found in the open manuscript.")); return; }
-  // Used to close the pane here so the manuscript wasn't hidden behind it —
-  // but a jump now often comes bundled with a properties dialog opening in
-  // that same pane (a tracker row's click does both at once), and closing
-  // out from under that dialog was worse than whatever sliver of manuscript
-  // the open pane covers. The pane already makes room for the page rather
-  // than overlaying it, so there's nothing left to hide behind anyway.
-  goToChapterTop(chId);
-  if (!quote) return;
-  const body = document.querySelector(`.chapter[data-id="${chId}"] .chapter-body`);
-  if (!body) return;
-  // tracker quotes are wrapped '…' — strip that pair back off before
-  // searching, matching the convention its own note-writing side uses
-  const clean = quote.replace(/^['"‘’“”]/, '').replace(/['"‘’“”]$/, '');
-  if (!clean) return;
-  // same text-position machinery darlings use to relocate a cut by its
-  // surrounding text (see bodyPlainText/textPosToRange below), just walked
-  // to find a literal match instead of restoring at a remembered offset.
-  // Case-insensitive, matching findRanges' own convention (Find & Replace) —
-  // a quote's case shouldn't be the reason it can't be found.
-  const text = bodyPlainText(body);
-  const needle = clean.toLowerCase();
-  const haystack = text.toLowerCase();
-  // Collect every match rather than stopping at the first — occurrence
-  // picks which one (1 = the first, matching how most references don't
-  // carry an occurrence at all and mean exactly that). Clamped to the
-  // last match still found, not treated as "not found", if the text has
-  // since changed and that many no longer exist.
-  const matches = [];
-  for (let at = haystack.indexOf(needle); at !== -1; at = haystack.indexOf(needle, at + 1)) {
-    matches.push(at);
-  }
-  if (matches.length === 0) {
-    toast(t("Landed on the chapter — couldn't pinpoint the exact passage."));
-    return;
-  }
-  const idx = matches[Math.min((occurrence || 1) - 1, matches.length - 1)];
-  const startR = textPosToRange(body, idx);
-  const endR = textPosToRange(body, idx + clean.length);
-  if (!startR || !endR) return;
-  const range = document.createRange();
-  range.setStart(startR.startContainer, startR.startOffset);
-  range.setEnd(endR.startContainer, endR.startOffset);
-  const scrollTo = range.startContainer.parentElement?.closest?.('p') || body;
-  scrollTo.scrollIntoView({ behavior: scrollBehavior(), block: 'center' });
-  // a brief "you are here" flash, not a sticky mark — same CSS Custom
-  // Highlight API Find & Replace already uses, rather than the real
-  // selection, so this doesn't steal focus/caret from goToChapterTop above
-  if (window.Highlight && window.CSS && CSS.highlights) {
-    clearTimeout(trackerJumpHighlightTimer);
-    CSS.highlights.set('neo-tracker-jump', new Highlight(range));
-    trackerJumpHighlightTimer = setTimeout(() => CSS.highlights.delete('neo-tracker-jump'), 2500);
-  }
-}
-
-// Right-click a text selection in the manuscript → create a character,
-// item, relic, skill, quest, or familiar in the tracker, prefilled with
-// whatever was selected. Registered after the spellcheck-suggestions and
-// macOS Look Up handlers (both already check/set e.defaultPrevented the
-// same way), so this only acts when neither of those claimed the click.
-document.addEventListener('contextmenu', async (e) => {
-  if (e.defaultPrevented) return;
-  const editor = e.target.closest && e.target.closest('.chapter-body');
-  // Cut text in Darlings has no live .chapter-body/.chapter — the darling
-  // object itself (darlings array) remembers which chapter it came from.
-  const darlingText = !editor && e.target.closest && e.target.closest('#darlings-list .darling-text');
-  if (!editor && !darlingText) return;
-  const sel = window.getSelection();
-  const text = sel && sel.rangeCount && !sel.isCollapsed ? sel.toString().trim() : '';
-  if (!text) return;
-  e.preventDefault();
-  const x = e.clientX, y = e.clientY;
-  const title = text.length > 28 ? text.slice(0, 28) + '…' : text;
-  const action = await popMenu(x, y, [
-    { label: t('Add character…'), value: 'character' },
-    { label: t('Add item…'), value: 'item' },
-    { label: t('Add relic…'), value: 'relic' },
-    { label: t('Add skill…'), value: 'skill' },
-    { label: t('Add quest…'), value: 'quest' },
-    { label: t('Add familiar…'), value: 'familiar' },
-    { label: t('Add mount…'), value: 'mount' },
-    { label: t('Add location…'), value: 'location' },
-  ], { title });
-  if (!action) return;
-  trackerFlowActive = true; // see its declaration above — keeps the pane open through the rest of this flow
-  await openTrackerPane();
-  if (!trackerReadyUrl) { toast(t("The tracker isn't available right now.")); trackerFlowActive = false; return; }
-  if (action === 'character') { await sendTrackerIntent('character', text); return; }
-  // a location belongs to the chapter on screen, not to anyone in it —
-  // same early return as 'character' above, skipping the "which
-  // character?" picker below entirely.
-  if (action === 'location') { await sendTrackerIntent('location', text); return; }
-  // everything else is attached to a specific character — ask which one.
-  // Scoped to the chapter being right-clicked in, via its charactersPresent
-  // (tag the chapter's cast first — the Cast disclosure, or the status
-  // screen's "In this chapter" checkbox — if this should offer anyone);
-  // POV character first, else Jake, else whatever order the tracker
-  // already returned them in.
-  let chId;
-  if (editor) {
-    chId = editor.closest('.chapter')?.dataset.id;
-  } else {
-    const did = darlingText.closest('.darling')?.dataset.did;
-    const d = darlings.find((x) => x.id === did);
-    // the chapter it was cut from may since have been deleted — falls back
-    // to the full cast below, same as an untagged chapter would
-    chId = d && book.chapterOrder.includes(d.chapterId) ? d.chapterId : null;
-  }
-  const n = chId ? chapterNumber(chId) : null;
-  let characters = [], povCharacter = null;
-  try {
-    const result = await (await fetch(trackerReadyUrl + '__neo-characters' + (n ? '?chapter=' + n : ''))).json();
-    characters = result.characters || [];
-    povCharacter = result.povCharacter || null;
-  } catch { /* stays empty */ }
-  characters.sort((a, b) =>
-    (a.id === povCharacter ? -1 : b.id === povCharacter ? 1 : 0)
-    || (a.id === 'jake' ? -1 : b.id === 'jake' ? 1 : 0));
-  const items = characters.length
-    ? characters.map((c) => ({ label: c.name, value: c.id }))
-    : [{ label: t('No characters available'), value: null, disabled: true }];
-  const owner = await popMenu(x, y, items, { title: t('For which character?') });
-  if (!owner) { trackerFlowActive = false; return; }
-  await sendTrackerIntent(action, text, owner);
-});
 
 /* ================================================================== */
 /*  NOTES PAGES — the book's, and one for each chapter                 */
@@ -9026,21 +8500,6 @@ function textPosToRange(body, pos) {
     acc += len;
   }
   return null;
-}
-
-// The reverse of textPosToRange above: given a text node + offset inside
-// it (a live Selection's own startContainer/startOffset, say), find how
-// far into bodyPlainText(body) that point falls. Same TreeWalker-over-
-// text-nodes approach, just stopping at the matching node instead of a
-// target length.
-function rangeToTextPos(body, node, offset) {
-  const w = document.createTreeWalker(body, NodeFilter.SHOW_TEXT);
-  let n, acc = 0;
-  while ((n = w.nextNode())) {
-    if (n === node) return acc + offset;
-    acc += n.textContent.length;
-  }
-  return -1;
 }
 
 // Where in the chapter does this darling belong?
@@ -12093,22 +11552,12 @@ function sidePaneForTab(name) {
   $('#editor-view').classList.toggle('outline-tab', outline);
   if (outline) renderLooseCards();
   // on Darlings the pane holds the book's snapshots, and stays open
+  const was = $('#editor-view').classList.contains('darlings-tab');
   const dar = name === 'darlings' && !!book && snapsCan() && !IS_POCKET; // (Pocket's own list: later)
   $('#editor-view').classList.toggle('darlings-tab', dar);
   if (dar) { snapList(); $('#side-pane').classList.add('open'); }
-  // Stickies (sticky notes) only live in the pane on Manuscript — elsewhere
-  // the pane is someone else's (Notes' chapter notes, Outline's loose cards,
-  // Darlings' snapshots), so a button promising sticky notes there would
-  // just show the wrong thing and look like a duplicate of that tab
-  const onManuscript = name === 'manuscript';
-  $('#side-pane-toggle').hidden = !onManuscript;
-  if (onManuscript) {
-    const open = $('#side-pane').classList.contains('open');
-    $('#side-pane-toggle').classList.toggle('active', open);
-    $('#side-pane-toggle').setAttribute('aria-pressed', open ? 'true' : 'false');
-  } else if (!dar && $('#side-pane').dataset.pinned !== '1') {
-    closeSidePane();
-  }
+  else if (was && $('#side-pane').dataset.pinned !== '1') $('#side-pane').classList.remove('open');
+  window.neoHooks?.tabShown?.(name); // litrpg-tracker (tracker-bridge.js)
 }
 
 // ---- the note walks ahead ----
@@ -12194,15 +11643,8 @@ function queueSideCards() {
 }
 function sideCardsUpdate(force) {
   const box = sideCardsBox();
-  // (the cards beside the page are behind Show More Features, and have no
-  // business showing while the pane is given over to the tracker instead —
-  // #side-cards sits right before #side-head regardless of what the pane's
-  // current mode is, so without this check it stacks on top of whatever
-  // the tracker itself is showing)
-  if (!book || currentTab !== 'manuscript' || !moreOn() || $('#side-pane').dataset.mode === 'tracker') {
-    if (sideCardsKey) { box.innerHTML = ''; sideCardsKey = ''; }
-    return;
-  }
+  // (the cards beside the page are behind Show More Features)
+  if (!book || currentTab !== 'manuscript' || !moreOn()) { if (sideCardsKey) { box.innerHTML = ''; sideCardsKey = ''; } return; }
   if (box.contains(document.activeElement)) return; // being typed on
   const sel = window.getSelection();
   let el = sel.rangeCount ? sel.anchorNode : null;
@@ -12303,7 +11745,8 @@ function sideCardsUpdate(force) {
 }
 document.addEventListener('selectionchange', queueSideCards);
 // the pane coming into view shows the cards as they are now (the Outline may
-// have changed them since) — handled by openSidePane() itself now
+// have changed them since)
+$('#side-hotzone').addEventListener('mouseenter', () => sideCardsUpdate(true));
 
 function walkNoteUpdate() {
   walkQueued = false;
@@ -12479,11 +11922,10 @@ function renderDarlings() {
   for (const d of darlings) {
     const el = document.createElement('div');
     el.className = 'darling';
-    el.dataset.did = d.id; // so the tracker right-click handler can look this darling back up
     const content = document.createElement('div');
-    content.className = 'darling-text';
     if (d.html) content.innerHTML = d.html;
     else content.textContent = d.text;
+    window.neoHooks?.darlingRendered?.(el, content, d); // litrpg-tracker (tracker-bridge.js)
     const meta = document.createElement('div');
     meta.className = 'd-meta';
     const when = fmtDate(d.date);
@@ -12586,8 +12028,7 @@ function bookWordCount() {
 
 function updateCounters() {
   if (!book) return;
-  notifyTrackerOfChapter(); // debounced itself — cheap to call every time this does
-  notifyTrackerOfWordCount(); // same — debounced itself
+  window.neoHooks?.countersUpdated?.(); // litrpg-tracker (tracker-bridge.js)
   // a script is one long chapter: its words are counted when the typing
   // pauses, not at every key
   if (isScript() && !updateCounters.now) {

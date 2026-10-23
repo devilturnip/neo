@@ -1,0 +1,65 @@
+/* litrpg-tracker — the fork's own styles, loaded after styles.css so
+   upstream's sheet stays untouched. Everything here hangs off ids and
+   classes the bridge (tracker-bridge.js) adds, or off #side-pane's
+   data-mode / data-wide attributes, which only the bridge sets. */
+
+/* A brief "you are here" flash when a tracker log entry's jump icon lands on
+   an exact passage — cleared a couple seconds after it's painted. */
+::highlight(neo-tracker-jump) { background: #c9a86a; color: #1c1c1c; }
+
+/* the pane shows either the Stickies/Notes content (default) or the
+   litrpg-tracker panel, picked by data-mode — tracker mode also gets a lot
+   more width, since the tracker's own layout wasn't built for a 250px
+   sidebar */
+#side-pane[data-mode="tracker"] { width: 560px; }
+/* "full screen" mode: an overlay you step into and back out of, not meant
+   to be pinned open beside the manuscript (there'd be little room left to
+   write) — so unlike the pin, this doesn't touch the manuscript's own
+   margins, just how big the (still hover/click-to-close) panel gets while
+   it's open. Sized so litrpg-tracker's own responsive layout (breakpoints
+   at 820px/1180px) can reach its real two/three-column view instead of the
+   single-column fallback it's stuck in at 560px. Above #bottombar (z-index
+   80) too, so it reads as actually taking over the window. */
+#side-pane[data-mode="tracker"][data-wide="1"] {
+  width: min(1200px, 92vw);
+  bottom: 0;
+  z-index: 85;
+}
+/* the cards beside the page (Show More Features) have no business showing
+   while the pane is given over to the tracker — #side-cards sits right
+   before #side-head regardless of mode, so it would stack on top of
+   whatever the tracker itself is showing */
+#side-pane[data-mode="tracker"] #sticky-list,
+#side-pane[data-mode="tracker"] #side-cards,
+#side-pane[data-mode="tracker"] .side-title-notes { display: none; }
+#tracker-pane-body, .side-title-tracker { display: none; }
+#side-pane[data-mode="tracker"] #tracker-pane-body { display: block; height: 100%; padding: 0 20px; color: var(--muted); font-size: 13px; }
+#side-pane[data-mode="tracker"] .side-title-tracker { display: inline; }
+#tracker-frame { width: 100%; height: 100%; border: none; display: block; background: #fff; }
+/* tracker-pane-body could later pick up var(--pane)/var(--accent) to match
+   NEO's own chrome instead of the tracker's own styling — not done here */
+
+/* only meaningful for the tracker — Stickies has no use for more width.
+   Placed like #side-pin (styles.css): fixed in the pane's top corner, below
+   the window's drag strip. */
+#side-wide { display: none; }
+#side-pane[data-mode="tracker"] #side-wide {
+  display: block;
+  position: fixed; top: 32px; right: 34px; -webkit-app-region: no-drag;
+  background: none; border: none; color: #555; font-size: 15px;
+}
+#side-wide.on { color: var(--accent); }
+
+/* the side pane (Notes & Comments) used to open on a right-edge hover;
+   it opens from this bottombar button instead, so the right edge stays free */
+#side-pane-toggle { background: none; border: none; color: var(--muted); font-size: 12px; cursor: pointer; margin-left: 10px; }
+#side-pane-toggle:hover { color: #ddd; }
+#side-pane-toggle.active { color: var(--accent); }
+/* the enlarged bottom bar in a small window (styles.css, .ui-zoomed): the
+   button wraps and sheds like the tabs beside it */
+.ui-zoomed #side-pane-toggle { white-space: nowrap; }
+@container (max-width: 700px) {
+  .ui-zoomed #side-pane-toggle { display: none; }
+}
+body.light #side-pane-toggle:hover { color: #1c1a17; }
+body.light #side-pane-toggle.active { color: var(--accent); }

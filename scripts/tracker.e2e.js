@@ -102,6 +102,49 @@ test('hovering again after using Stickies correctly switches back to tracker mod
   assert.equal(await js(`getComputedStyle(document.getElementById('sticky-list')).display`), 'none');
 });
 
+// The rest covers what tracker-bridge.js builds itself (its markup and the
+// observer that keeps the Stickies button honest), so an upstream merge
+// that breaks the bridge's footing shows up here, not in use.
+test('the Stickies button lights up only while the pane is open on Stickies', async () => {
+  const lit = () => js(`document.getElementById('side-pane-toggle').classList.contains('active')`);
+  assert.equal(await lit(), false, 'tracker mode is open from the previous test — the button stays unlit');
+  await js(`document.getElementById('side-pane-toggle').click()`);
+  await tick(100);
+  assert.equal(await lit(), true);
+  await js(`document.getElementById('side-pane-toggle').click()`);
+  await tick(100);
+  assert.equal(await lit(), false);
+});
+
+test('the full-screen button shows only in tracker mode, and toggles the pane wide', async () => {
+  const wideDisplay = () => js(`getComputedStyle(document.getElementById('side-wide')).display`);
+  const wide = () => js(`document.getElementById('side-pane').dataset.wide`);
+  await hover('side-hotzone', true);
+  await tick(250);
+  assert.equal(await wideDisplay(), 'block');
+  await js(`document.getElementById('side-wide').click()`);
+  await tick(50);
+  assert.equal(await wide(), '1');
+  await js(`document.getElementById('side-wide').click()`);
+  await tick(50);
+  assert.equal(await wide(), '0');
+  await js(`document.getElementById('side-pane-toggle').click()`); // over to Stickies
+  await tick(100);
+  assert.equal(await wideDisplay(), 'none');
+});
+
+test('leaving the Manuscript tab hides the Stickies button and closes the unpinned pane', async () => {
+  const hidden = () => js(`document.getElementById('side-pane-toggle').hidden`);
+  assert.equal((await paneState()).open, true, 'Stickies is open from the previous test');
+  await js(`sidePaneForTab('notes')`);
+  await tick(100);
+  assert.equal(await hidden(), true);
+  assert.equal((await paneState()).open, false);
+  await js(`sidePaneForTab('manuscript')`);
+  await tick(100);
+  assert.equal(await hidden(), false);
+});
+
 async function main() {
   await app.whenReady();
   let failed = 0;

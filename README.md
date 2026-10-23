@@ -110,6 +110,31 @@ To build installers: `npm install electron-builder --save-dev`, then `npm run pa
 
 The app is very simple: an Electron shell (`main.js`), a preload bridge (`preload.js`), and a renderer (`app.js` + `styles.css` + `index.html`). If you know JavaScript, you can change NEO. Have at it.
 
+## The tracker bridge (this fork)
+
+Everything the fork adds lives in three files of its own, so upstream NEO can be merged with `git merge upstream/main` and only a handful of one-line hooks ever collide:
+
+- `tracker-bridge.js` — the renderer side: the right-edge pane's tracker mode (beside Stickies), the embedded dev-server iframe, and all NEO ↔ tracker traffic. Loaded by `index.html` right after `app.js`; not loaded in Pocket.
+- `tracker.css` — the fork's styles, loaded after `styles.css`.
+- `tracker-main.js` — the main-process side: finds or spawns the tracker's Vite dev server (`~/Projects/litrpg-tracker`, port 5173) and answers the `tracker:ensure` IPC call.
+
+The lines upstream files carry for it, to re-apply by hand if a merge ever loses one (each is tagged `litrpg-tracker` in a trailing comment, so `git grep litrpg-tracker -- app.js main.js preload.js index.html` lists them):
+
+| File | Where | Line |
+|---|---|---|
+| `index.html` | `<head>` / end of `<body>` | `<link rel="stylesheet" href="tracker.css" />` and `<script src="tracker-bridge.js"></script>` |
+| `main.js` | after `let backupRunning = false;` | `require('./tracker-main.js')({ app, ipcMain, logError });` |
+| `preload.js` | the `neo` API | `trackerEnsure: () => ipcRenderer.invoke('tracker:ensure'),` |
+| `app.js` | `createChapterAt()`, before `return chId` | `window.neoHooks?.chapterCreated?.(chId);` |
+| `app.js` | `focusSticky()`, after the pane opens | `window.neoHooks?.stickyFocused?.();` |
+| `app.js` | `wireHoverPane()`, in `pinned()` | `\|\| !!window.neoHooks?.paneLocked?.(pane, 'hover')` |
+| `app.js` | `closeUnpinnedPanes()`, the side-pane condition | `&& !window.neoHooks?.paneLocked?.($('#side-pane'), 'blur')` |
+| `app.js` | `sidePaneForTab()`, last line | `window.neoHooks?.tabShown?.(name);` |
+| `app.js` | `renderDarlings()`, once `content` is filled | `window.neoHooks?.darlingRendered?.(el, content, d);` |
+| `app.js` | `updateCounters()`, after the `!book` guard | `window.neoHooks?.countersUpdated?.();` |
+
+The bridge installs `window.neoHooks` at the bottom of `tracker-bridge.js`, where each hook is documented; without the bridge every hook is a no-op. `npm run test:tracker` drives the pane's mode switching end to end — run it (and `npm test`, `npm run lint`) after every upstream merge.
+
 ## Roadmap (things I'm dreaming up but may never get to):
 
 Chapter version history · manuscript format for agent submissions (Times New Roman, double-spaced, address block, just to make Kristin Nelson happy) · global end matter that updates every book at once (same for copyright pages, bios, etc).
