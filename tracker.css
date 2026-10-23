@@ -35,7 +35,9 @@
 #tracker-pane-body, .side-title-tracker { display: none; }
 #side-pane[data-mode="tracker"] #tracker-pane-body { display: block; height: 100%; padding: 0 20px; color: var(--muted); font-size: 13px; }
 #side-pane[data-mode="tracker"] .side-title-tracker { display: inline; }
-#tracker-frame { width: 100%; height: 100%; border: none; display: block; background: #fff; }
+/* dark, not white: this is what shows while the cross-origin page has no frame
+   to present yet — every time the pane slides in, not just on first load */
+#tracker-frame { width: 100%; height: 100%; border: none; display: block; background: #191919; }
 /* tracker-pane-body could later pick up var(--pane)/var(--accent) to match
    NEO's own chrome instead of the tracker's own styling — not done here */
 
