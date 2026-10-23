@@ -546,7 +546,7 @@ document.addEventListener('contextmenu', async (e) => {
     { label: t('Add character…'), value: 'character' },
     { label: t('Add item…'), value: 'item' },
     { label: t('Add relic…'), value: 'relic' },
-    { label: t('Add skill…'), value: 'skill' },
+    { label: t('Add ability…'), value: 'skill' },
     { label: t('Add quest…'), value: 'quest' },
     { label: t('Add familiar…'), value: 'familiar' },
     { label: t('Add mount…'), value: 'mount' },
