@@ -187,6 +187,33 @@ test('after an unseen exit, a click elsewhere still closes the pane', async () =
   assert.equal((await paneState()).open, false);
 });
 
+test('while a tracker dialog is open, neither leaving the pane nor a click outside closes it', async () => {
+  await js(`
+    window.__prevUrl2 = trackerReadyUrl; trackerReadyUrl = 'http://stub/';
+    window.__editing = true; window.__realFetch2 = window.fetch;
+    window.fetch = (u) => String(u).includes('__tracker-editing')
+      ? Promise.resolve({ ok: true, json: async () => ({ editing: window.__editing }) })
+      : Promise.resolve({ ok: true, json: async () => ({}) }); 0`);
+  await hover('side-hotzone', true);
+  await tick(600); // past the slide-in, and a couple of polls
+  await moveTo('inside');
+  await tick(20);
+  await moveTo('outside');
+  await tick(50);
+  assert.equal((await paneState()).open, true, 'held through the cursor leaving');
+  await js(`document.getElementById('back-to-shelf').dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))`);
+  await tick(50);
+  assert.equal((await paneState()).open, true, 'held through a click outside');
+  await js(`window.__editing = false; 0`); // the dialog closed
+  await tick(400);
+  await moveTo('inside');
+  await tick(20);
+  await moveTo('outside');
+  await tick(50);
+  assert.equal((await paneState()).open, false, 'released once the dialog closed');
+  await js(`window.fetch = window.__realFetch2; trackerReadyUrl = window.__prevUrl2; 0`);
+});
+
 // The Ctrl+D palette, against a stand-in tracker server: a canned search
 // hit, and a recorded quick-reference post. Nothing here needs the real
 // tracker; trackerReadyUrl is pointed at the stub for these two cases.

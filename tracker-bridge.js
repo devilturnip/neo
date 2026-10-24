@@ -100,6 +100,9 @@ document.addEventListener('mousedown', (e) => {
   const pane = $('#side-pane');
   if (!pane.classList.contains('open') || pane.dataset.pinned === '1') return;
   if ($('#editor-view').classList.contains('darlings-tab')) return; // snapshots stay
+  // a tracker dialog is open (see trackerEditing): a click into the
+  // manuscript — to select a passage for it, say — mustn't take it away
+  if (trackerEditing && pane.dataset.mode === 'tracker') return;
   if (pane.contains(e.target) || e.target.closest('#side-pane-toggle')) return;
   // a pop-menu (e.g. the right-click "Add to the tracker" action/character
   // pickers) renders at document.body, not inside #side-pane, at whatever
@@ -208,6 +211,7 @@ document.addEventListener('mousemove', (e) => {
   // right-click flow — stay open until the cursor is genuinely back over
   // the pane, or a click lands somewhere else.
   if (!inside && previous.inside && Date.now() - previous.at > TRACKER_UNSEEN_EXIT_MS) trackerFlowActive = true;
+  if (trackerEditing) return; // a tracker dialog is open — held regardless of where the cursor is
   if (trackerFlowActive) {
     if (inside) trackerFlowActive = false; // genuinely engaging with it now — resume normal tracking
     return; // never auto-close mid-flow (or just after) purely from cursor position
@@ -465,6 +469,25 @@ async function checkWantsManuscript() {
 // there's nothing pending — cheap enough to just always be running, like
 // the dev server probe.
 setInterval(() => { checkTrackerGoto(); checkWantsManuscript(); }, 1000);
+
+// Whether the tracker page has a dialog open (it posts a heartbeat while
+// one is up). While it does, the drawer is held open: neither the cursor
+// leaving it nor a click in the manuscript closes it. Polled fast, and
+// only while the pane is showing the tracker, so the hold is in place
+// before the cursor can get from the dialog to the manuscript.
+let trackerEditing = false;
+async function checkTrackerEditing() {
+  const pane = $('#side-pane');
+  if (!trackerReadyUrl || pane.dataset.mode !== 'tracker' || !pane.classList.contains('open')) {
+    trackerEditing = false;
+    return;
+  }
+  try {
+    const body = await (await fetch(trackerReadyUrl + '__tracker-editing')).json();
+    trackerEditing = !!(body && body.editing);
+  } catch { trackerEditing = false; }
+}
+setInterval(() => { checkTrackerEditing(); }, 250);
 async function checkTrackerGoto() {
   if (!trackerReadyUrl) return;
   let body;
