@@ -317,36 +317,46 @@ function rangeToTextPos(body, node, offset) {
 // body, so a stale quote never lingers past the instant it stops being
 // true — unlike the one-shot intents elsewhere on this pane, this is live
 // state, always reflecting whatever's highlighted right now.
+// The live manuscript selection, if there is one: the chapter body it sits
+// in, its text, a copy of its range (to put it back after the palette has
+// had the keyboard), and which occurrence of that text within the chapter
+// the selection starts at (1 = the first) — so the tracker can tell apart
+// two references that share a chapter and quote (the same short word
+// mentioned twice), and later jump back to the right one. Best-effort:
+// only computed when the selection's start position can be found at all;
+// nothing downstream requires it.
+function selectionInfo() {
+  const sel = window.getSelection();
+  let el = sel.rangeCount ? sel.anchorNode : null;
+  if (el && el.nodeType === Node.TEXT_NODE) el = el.parentElement;
+  const body = el && el.closest ? el.closest('.chapter-body') : null;
+  const text = body && !sel.isCollapsed ? sel.toString().trim() : '';
+  if (!text) return null;
+  const range = sel.getRangeAt(0);
+  let occurrence = null;
+  const pos = rangeToTextPos(body, range.startContainer, range.startOffset);
+  if (pos !== -1) {
+    const plain = bodyPlainText(body).toLowerCase();
+    const needle = text.toLowerCase();
+    let idx = -1, count = 0;
+    while ((idx = plain.indexOf(needle, idx + 1)) !== -1 && idx <= pos) count++;
+    if (count > 0) occurrence = count;
+  }
+  return { body, text, occurrence, range: range.cloneRange() };
+}
+
 let trackerNotifiedSelection = null;
 let trackerNotifySelectionTimer = null;
 function notifyTrackerOfSelection() {
   if (!trackerReadyUrl) return;
+  // The palette's own input holds the selection while it's up; the
+  // manuscript's is coming back the moment it closes.
+  if (palette) return;
   clearTimeout(trackerNotifySelectionTimer);
   trackerNotifySelectionTimer = setTimeout(() => {
-    const sel = window.getSelection();
-    let el = sel.rangeCount ? sel.anchorNode : null;
-    if (el && el.nodeType === Node.TEXT_NODE) el = el.parentElement;
-    const body = el && el.closest ? el.closest('.chapter-body') : null;
-    const text = body && !sel.isCollapsed ? sel.toString().trim() : '';
-    // Which occurrence of `text` within this chapter the selection's own
-    // start falls at (1 = the first) — so the tracker can tell apart two
-    // references that happen to share the same chapter and quote (the
-    // same short word mentioned twice), and later jump back to the right
-    // one instead of always the first match of that text. Best-effort:
-    // only computed when the selection's start position can be found at
-    // all; nothing downstream requires it.
-    let occurrence = null;
-    if (text) {
-      const range = sel.getRangeAt(0);
-      const pos = rangeToTextPos(body, range.startContainer, range.startOffset);
-      if (pos !== -1) {
-        const plain = bodyPlainText(body).toLowerCase();
-        const needle = text.toLowerCase();
-        let idx = -1, count = 0;
-        while ((idx = plain.indexOf(needle, idx + 1)) !== -1 && idx <= pos) count++;
-        if (count > 0) occurrence = count;
-      }
-    }
+    const info = selectionInfo();
+    const text = info ? info.text : '';
+    const occurrence = info ? info.occurrence : null;
     // Keyed on text+occurrence together, not text alone — otherwise
     // selecting the second "Cheshire" right after the first would look
     // unchanged and never get reposted.
@@ -595,23 +605,163 @@ document.addEventListener('contextmenu', async (e) => {
   await sendTrackerIntent(action, text, owner);
 });
 
-// Ctrl+K / ⌘K from anywhere in NEO: the tracker's search box. Opens the
-// pane (held open past the first mousemove, the way the right-click flow
-// is) and hands the keyboard over through a one-shot intent — the page
-// polls those once a second, so the caret lands within that. Free in
-// upstream NEO; Ctrl+Shift+K is theirs, this isn't.
+/* ================================================================== */
+/*  Ctrl+K: attach a reference without leaving the manuscript          */
+/* ================================================================== */
+
+// Select a passage, Ctrl+K, type part of a name, Enter: the selection is
+// filed as a reference on that entity and the cursor is back where it
+// was. All inside NEO's own window — the tracker's dev server answers the
+// search and takes the write (both replies CORS-readable), so nothing
+// waits on a poll or a pane. Prefilled with the selection, since the
+// selected words are often the name itself. With nothing selected, or
+// Shift+Enter, the hit opens in the tracker pane instead. Ctrl+K is free
+// in upstream NEO; Ctrl+Shift+K is theirs, this isn't.
+let palette = null; // { el, input, list, saved, hits, active, seq } while open
+
+function closePalette(restore) {
+  if (!palette) return;
+  const { el, saved } = palette;
+  palette = null;
+  el.remove();
+  if (restore && saved && document.contains(saved.body)) {
+    saved.body.focus({ preventScroll: true });
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(saved.range);
+  }
+}
+
+function renderPalette() {
+  if (!palette) return;
+  const { list, hits, active, note } = palette;
+  list.innerHTML = '';
+  if (note) {
+    const li = document.createElement('li');
+    li.className = 'tp-note';
+    li.textContent = note;
+    list.appendChild(li);
+    return;
+  }
+  hits.forEach((hit, i) => {
+    const li = document.createElement('li');
+    if (i === active) li.classList.add('active');
+    const name = document.createElement('span');
+    name.className = 'tp-name';
+    name.textContent = hit.name;
+    const kind = document.createElement('span');
+    kind.className = 'tp-kind';
+    kind.textContent = hit.label + (hit.via ? ' · ' + hit.via : '');
+    li.append(name, kind);
+    li.addEventListener('mousedown', (e) => e.preventDefault()); // keep the input focused
+    li.addEventListener('click', (e) => { palette.active = i; choosePaletteHit(e.shiftKey); });
+    list.appendChild(li);
+  });
+}
+
+async function searchPalette() {
+  if (!palette || !trackerReadyUrl) return;
+  const q = palette.input.value.trim();
+  const seq = ++palette.seq;
+  if (q.length < 2) { palette.hits = []; palette.note = null; renderPalette(); return; }
+  let hits = [];
+  try {
+    const reply = await (await fetch(trackerReadyUrl + '__search?q=' + encodeURIComponent(q) + '&limit=8')).json();
+    hits = Array.isArray(reply.hits) ? reply.hits : [];
+  } catch { hits = []; }
+  if (!palette || seq !== palette.seq) return; // closed, or typed past
+  palette.hits = hits;
+  palette.active = 0;
+  palette.note = hits.length ? null : t('No matches');
+  renderPalette();
+}
+
+async function choosePaletteHit(open) {
+  if (!palette) return;
+  const hit = palette.hits[palette.active];
+  if (!hit) return;
+  const { saved } = palette;
+  if (open || !saved) {
+    closePalette(true);
+    trackerFlowActive = true;
+    await openTrackerPane();
+    if (trackerReadyUrl) await sendTrackerIntent('open', hit.kind + ':' + hit.id);
+    return;
+  }
+  // The chapter the selection sits in, not whichever one the caret was
+  // last reported from — they can differ with two chapters on screen.
+  const chId = saved.body.closest('.chapter')?.dataset.id || currentChapterId;
+  const body = { target: hit.kind, id: hit.id, chapter: chapterNumber(chId), quote: saved.text };
+  if (saved.occurrence && saved.occurrence > 1) body.occurrence = saved.occurrence;
+  let reply;
+  try {
+    // No Content-Type on purpose: a text/plain body needs no preflight,
+    // and the route parses it as JSON regardless.
+    reply = await (await fetch(trackerReadyUrl + '__quick-reference', { method: 'POST', body: JSON.stringify(body) })).json();
+  } catch { reply = { error: t('no reply from the tracker') }; }
+  if (!palette) return;
+  if (!reply || reply.error) { toast(t('Reference not added: ') + (reply && reply.error ? reply.error : '')); return; }
+  closePalette(true);
+  toast(t('Reference added to ') + (reply.name || hit.name));
+}
+
+async function openReferencePalette() {
+  if (palette) { palette.input.focus(); return; }
+  const saved = selectionInfo();
+  const el = document.createElement('div');
+  el.id = 'tracker-palette';
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.spellcheck = false;
+  input.autocomplete = 'off';
+  input.placeholder = t(saved ? 'Attach the selection to…' : 'Open in the tracker…');
+  const list = document.createElement('ul');
+  el.append(input, list);
+  document.body.appendChild(el);
+  palette = { el, input, list, saved, hits: [], active: 0, seq: 0, note: null };
+  input.value = saved ? saved.text : '';
+  input.focus();
+  input.select();
+  input.addEventListener('input', () => { searchPalette(); });
+  input.addEventListener('keydown', (e) => {
+    if (!palette) return;
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      if (palette.hits.length) { palette.active = Math.min(palette.active + 1, palette.hits.length - 1); renderPalette(); }
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      if (palette.hits.length) { palette.active = Math.max(palette.active - 1, 0); renderPalette(); }
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      choosePaletteHit(e.shiftKey);
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      e.stopPropagation();
+      closePalette(true);
+    }
+  });
+  if (!trackerReadyUrl) {
+    palette.note = t('Starting the tracker…');
+    renderPalette();
+    await ensureTrackerPane(); // starts or finds the dev server; the pane stays closed
+    if (!palette) return; // closed meanwhile
+    if (!trackerReadyUrl) { closePalette(true); toast(t("The tracker isn't available right now.")); return; }
+  }
+  searchPalette();
+}
+
 document.addEventListener('keydown', (e) => {
   if (e.defaultPrevented) return;
   if (!(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey || e.key.toLowerCase() !== 'k') return;
   e.preventDefault();
-  (async () => {
-    trackerFlowActive = true;
-    await openTrackerPane();
-    if (!trackerReadyUrl) { trackerFlowActive = false; toast(t("The tracker isn't available right now.")); return; }
-    await sendTrackerIntent('search', '');
-    trackerFrame?.contentWindow?.focus();
-  })();
+  openReferencePalette();
 });
+// a click anywhere else, or the window losing focus, dismisses it — the
+// selection is left wherever that click put it
+document.addEventListener('mousedown', (e) => {
+  if (palette && !palette.el.contains(e.target)) closePalette(false);
+}, true);
+window.addEventListener('blur', () => closePalette(false));
 
 /* ================================================================== */
 /*  The hooks app.js calls                                              */

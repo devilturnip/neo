@@ -52,6 +52,37 @@
 }
 #side-wide.on { color: var(--accent); }
 
+/* the Ctrl+K reference palette (tracker-bridge.js) — styled after .pop-menu,
+   above everything the way a pop-menu is */
+#tracker-palette {
+  position: fixed; top: 14vh; left: 50%; transform: translateX(-50%);
+  width: min(440px, 90vw); z-index: 960;
+  background: #262626; border: 1px solid #3a3a3a; border-radius: 8px; padding: 6px;
+  box-shadow: 0 8px 28px rgba(0,0,0,0.5);
+  font: 13px/1.3 -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
+  -webkit-app-region: no-drag;
+}
+#tracker-palette input {
+  width: 100%; box-sizing: border-box; padding: 8px 10px;
+  font: inherit; font-size: 15px; color: #eee;
+  background: #1b1b1b; border: 1px solid #3a3a3a; border-radius: 6px; outline: none;
+}
+#tracker-palette input:focus { border-color: var(--accent); }
+#tracker-palette ul { list-style: none; margin: 4px 0 0; padding: 0; max-height: 50vh; overflow-y: auto; }
+#tracker-palette ul:empty { margin: 0; }
+#tracker-palette li {
+  display: flex; align-items: baseline; gap: 10px;
+  padding: 6px 10px; border-radius: 5px; color: #ddd; cursor: pointer;
+}
+#tracker-palette li.active, #tracker-palette li:not(.tp-note):hover { background: rgba(255,255,255,0.08); }
+#tracker-palette .tp-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#tracker-palette .tp-kind { color: var(--muted); font-size: 11px; white-space: nowrap; }
+#tracker-palette li.tp-note { color: var(--muted); cursor: default; }
+body.light #tracker-palette { background: #fff; border-color: #d9d4ca; box-shadow: 0 8px 28px rgba(0,0,0,0.16); }
+body.light #tracker-palette input { background: #faf9f6; border-color: #cfcac0; color: #1c1a17; }
+body.light #tracker-palette li { color: #2b2926; }
+body.light #tracker-palette li.active, body.light #tracker-palette li:not(.tp-note):hover { background: rgba(0,0,0,0.06); }
+
 /* the side pane (Notes & Comments) used to open on a right-edge hover;
    it opens from this bottombar button instead, so the right edge stays free */
 #side-pane-toggle { background: none; border: none; color: var(--muted); font-size: 12px; cursor: pointer; margin-left: 10px; }

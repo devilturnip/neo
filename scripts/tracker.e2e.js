@@ -145,22 +145,56 @@ test('leaving the Manuscript tab hides the Stickies button and closes the unpinn
   assert.equal(await hidden(), false);
 });
 
-test('Ctrl+K opens the pane in tracker mode and asks the tracker for its search box', async () => {
+// The Ctrl+K palette, against a stand-in tracker server: a canned search
+// hit, and a recorded quick-reference post. Nothing here needs the real
+// tracker; trackerReadyUrl is pointed at the stub for these two cases.
+const ctrlK = () => js(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ctrlKey: true, bubbles: true, cancelable: true }))`);
+const paletteInput = () => js(`(() => { const i = document.querySelector('#tracker-palette input'); return i ? { value: i.value, focused: document.activeElement === i, selected: i.value.slice(i.selectionStart, i.selectionEnd) } : null; })()`);
+
+test('Ctrl+K opens the palette prefilled with the selection; Enter files it and puts the selection back', async () => {
   await js(`document.getElementById('back-to-shelf').dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))`);
   await tick(100);
-  assert.equal((await paneState()).open, false, 'starts closed');
-  // Record the bridge's posts instead of making them.
-  await js(`window.__posts = []; window.__realFetch = window.fetch; window.fetch = (u) => { window.__posts.push(String(u)); return Promise.resolve({ ok: true, json: async () => ({}) }); }; 0`);
-  await js(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ctrlKey: true, bubbles: true, cancelable: true }))`);
-  await tick(1500);
-  const state = await paneState();
-  assert.equal(state.open, true);
-  assert.equal(state.mode, 'tracker');
-  // Only when a tracker server was found (this suite doesn't require one).
-  if (await js(`!!trackerReadyUrl`)) {
-    assert.ok(await js(`window.__posts.some((u) => u.includes('__neo-intent?type=search'))`), 'the search intent was posted');
-  }
-  await js(`window.fetch = window.__realFetch; 0`);
+  await js(`
+    window.__prevUrl = trackerReadyUrl; trackerReadyUrl = 'http://stub/';
+    window.__posts = []; window.__realFetch = window.fetch;
+    window.fetch = (u, o) => {
+      const url = String(u);
+      if (url.includes('__search')) return Promise.resolve({ ok: true, json: async () => ({ hits: [{ kind: 'item', id: 'sword', name: 'Sword', label: 'item' }] }) });
+      if (url.includes('__quick-reference')) { window.__posts.push(JSON.parse(o.body)); return Promise.resolve({ ok: true, json: async () => ({ ok: true, name: 'Sword', references: [], presentAdded: false }) }); }
+      return Promise.resolve({ ok: true, json: async () => ({}) });
+    };
+    // select the first word of the test chapter
+    const body = document.querySelector('.chapter-body');
+    const walker = document.createTreeWalker(body, NodeFilter.SHOW_TEXT);
+    const node = walker.nextNode();
+    const range = document.createRange(); range.setStart(node, 0); range.setEnd(node, 5);
+    const sel = getSelection(); sel.removeAllRanges(); sel.addRange(range); 0`);
+  assert.equal(await js(`getSelection().toString()`), 'Hello');
+  await ctrlK();
+  await tick(400);
+  assert.deepEqual(await paletteInput(), { value: 'Hello', focused: true, selected: 'Hello' });
+  assert.equal(await js(`document.querySelector('#tracker-palette li.active .tp-name')?.textContent`), 'Sword', 'the prefilled query already found a hit');
+  await js(`const i = document.querySelector('#tracker-palette input'); i.value = 'sw'; i.dispatchEvent(new Event('input')); 0`);
+  await tick(200);
+  assert.equal(await js(`document.querySelectorAll('#tracker-palette li').length`), 1);
+  await js(`document.querySelector('#tracker-palette input').dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))`);
+  await tick(300);
+  assert.deepEqual(await js(`window.__posts`), [{ target: 'item', id: 'sword', chapter: 1, quote: 'Hello' }]);
+  assert.equal(await js(`!!document.getElementById('tracker-palette')`), false, 'the palette closed');
+  assert.equal(await js(`getSelection().toString()`), 'Hello', 'the selection is back');
+  assert.equal(await js(`document.activeElement === document.querySelector('.chapter-body')`), true, 'and so is focus');
+});
+
+test('Escape closes the palette without posting, selection intact', async () => {
+  await ctrlK();
+  await tick(300);
+  assert.equal((await paletteInput())?.value, 'Hello');
+  await js(`document.querySelector('#tracker-palette input').dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))`);
+  await tick(100);
+  assert.equal(await js(`!!document.getElementById('tracker-palette')`), false);
+  assert.equal(await js(`window.__posts.length`), 1, 'nothing new was posted');
+  assert.equal(await js(`getSelection().toString()`), 'Hello');
+  await js(`window.fetch = window.__realFetch; trackerReadyUrl = window.__prevUrl; 0`);
 });
 
 async function main() {
