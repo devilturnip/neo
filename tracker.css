@@ -52,7 +52,7 @@
 }
 #side-wide.on { color: var(--accent); }
 
-/* the Ctrl+K reference palette (tracker-bridge.js) — styled after .pop-menu,
+/* the Ctrl+R reference palette (tracker-bridge.js) — styled after .pop-menu,
    above everything the way a pop-menu is */
 #tracker-palette {
   position: fixed; top: 14vh; left: 50%; transform: translateX(-50%);
