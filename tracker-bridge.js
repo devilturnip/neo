@@ -182,6 +182,16 @@ if (!NO_HOVER) {
 // there, and resumes — accurately — the instant it's back over our own
 // content. No debounce needed: by the time a mousemove reports the cursor
 // outside the pane, it genuinely is.
+// This document's own last cursor reading over the pane, and when. A
+// reading outside that follows an *old* inside one means the cursor left
+// while the iframe had it — a text selection dragged out of a tracker
+// field holds the mouse inside the iframe until let go, so this document
+// sees nothing between the press and the first move after release. A
+// normal exit passes through the pane's own side padding on the way out,
+// which leaves a reading inside only milliseconds before.
+let trackerLastSeen = { inside: false, at: 0 };
+const TRACKER_UNSEEN_EXIT_MS = 300;
+
 document.addEventListener('mousemove', (e) => {
   const pane = $('#side-pane');
   if (pane.dataset.mode !== 'tracker' || !pane.classList.contains('open') || pane.dataset.pinned === '1') return;
@@ -192,6 +202,12 @@ document.addEventListener('mousemove', (e) => {
   if (Date.now() - trackerPaneOpenedAt < 250) return;
   const r = pane.getBoundingClientRect();
   const inside = e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom;
+  const previous = trackerLastSeen;
+  trackerLastSeen = { inside, at: Date.now() };
+  // Out of nowhere (see trackerLastSeen above): treat it like the
+  // right-click flow — stay open until the cursor is genuinely back over
+  // the pane, or a click lands somewhere else.
+  if (!inside && previous.inside && Date.now() - previous.at > TRACKER_UNSEEN_EXIT_MS) trackerFlowActive = true;
   if (trackerFlowActive) {
     if (inside) trackerFlowActive = false; // genuinely engaging with it now — resume normal tracking
     return; // never auto-close mid-flow (or just after) purely from cursor position

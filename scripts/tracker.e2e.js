@@ -145,6 +145,48 @@ test('leaving the Manuscript tab hides the Stickies button and closes the unpinn
   assert.equal(await hidden(), false);
 });
 
+// A selection dragged out of a tracker field: the iframe holds the mouse,
+// so this document's next reading after release is already outside, with
+// its last inside one long gone. That mustn't close the pane; a normal
+// exit (inside, then outside a moment later) still does.
+const moveTo = (where) => js(`(() => {
+  const r = document.getElementById('side-pane').getBoundingClientRect();
+  const x = ${where === 'inside' ? 'r.left + 5' : 'Math.max(5, r.left - 200)'}, y = r.top + r.height / 2;
+  document.dispatchEvent(new MouseEvent('mousemove', { clientX: x, clientY: y, bubbles: true }));
+})()`);
+
+test('a selection let go outside the pane leaves it open; a normal exit still closes it', async () => {
+  await hover('side-hotzone', true);
+  await tick(300);
+  assert.equal((await paneState()).open, true);
+  await moveTo('inside');
+  await tick(450); // the iframe has the mouse; this document hears nothing
+  await moveTo('outside');
+  await tick(50);
+  assert.equal((await paneState()).open, true, 'stays open after an unseen exit');
+  await moveTo('outside');
+  await tick(50);
+  assert.equal((await paneState()).open, true, 'and keeps staying open until the cursor comes back');
+  await moveTo('inside');
+  await tick(20);
+  await moveTo('outside');
+  await tick(50);
+  assert.equal((await paneState()).open, false, 'a normal exit closes it');
+});
+
+test('after an unseen exit, a click elsewhere still closes the pane', async () => {
+  await hover('side-hotzone', true);
+  await tick(300);
+  await moveTo('inside');
+  await tick(450);
+  await moveTo('outside');
+  await tick(50);
+  assert.equal((await paneState()).open, true);
+  await js(`document.getElementById('back-to-shelf').dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))`);
+  await tick(100);
+  assert.equal((await paneState()).open, false);
+});
+
 // The Ctrl+D palette, against a stand-in tracker server: a canned search
 // hit, and a recorded quick-reference post. Nothing here needs the real
 // tracker; trackerReadyUrl is pointed at the stub for these two cases.
