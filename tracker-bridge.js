@@ -609,14 +609,14 @@ document.addEventListener('contextmenu', async (e) => {
 /*  Ctrl+K: attach a reference without leaving the manuscript          */
 /* ================================================================== */
 
-// Select a passage, Ctrl+R, type part of a name, Enter: the selection is
+// Select a passage, Ctrl+D, type part of a name, Enter: the selection is
 // filed as a reference on that entity and the cursor is back where it
 // was. All inside NEO's own window — the tracker's dev server answers the
 // search and takes the write (both replies CORS-readable), so nothing
 // waits on a poll or a pane. Prefilled with the selection, since the
 // selected words are often the name itself. With nothing selected, or
-// Shift+Enter, the hit opens in the tracker pane instead. Ctrl+R is free
-// in upstream NEO (its menu binds no reload; Ctrl+Shift+R is theirs).
+// Shift+Enter, the hit opens in the tracker pane instead. Ctrl+D is free
+// in upstream NEO (Ctrl+Shift+D is theirs) and an easy left-hand reach.
 let palette = null; // { el, input, list, saved, hits, active, seq } while open
 
 function closePalette(restore) {
@@ -752,7 +752,7 @@ async function openReferencePalette() {
 
 document.addEventListener('keydown', (e) => {
   if (e.defaultPrevented) return;
-  if (!(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey || e.key.toLowerCase() !== 'r') return;
+  if (!(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey || e.key.toLowerCase() !== 'd') return;
   e.preventDefault();
   openReferencePalette();
 });

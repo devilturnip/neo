@@ -145,13 +145,13 @@ test('leaving the Manuscript tab hides the Stickies button and closes the unpinn
   assert.equal(await hidden(), false);
 });
 
-// The Ctrl+R palette, against a stand-in tracker server: a canned search
+// The Ctrl+D palette, against a stand-in tracker server: a canned search
 // hit, and a recorded quick-reference post. Nothing here needs the real
 // tracker; trackerReadyUrl is pointed at the stub for these two cases.
-const ctrlR = () => js(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'r', ctrlKey: true, bubbles: true, cancelable: true }))`);
+const ctrlD = () => js(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'd', ctrlKey: true, bubbles: true, cancelable: true }))`);
 const paletteInput = () => js(`(() => { const i = document.querySelector('#tracker-palette input'); return i ? { value: i.value, focused: document.activeElement === i, selected: i.value.slice(i.selectionStart, i.selectionEnd) } : null; })()`);
 
-test('Ctrl+R opens the palette prefilled with the selection; Enter files it and puts the selection back', async () => {
+test('Ctrl+D opens the palette prefilled with the selection; Enter files it and puts the selection back', async () => {
   await js(`document.getElementById('back-to-shelf').dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))`);
   await tick(100);
   await js(`
@@ -170,7 +170,7 @@ test('Ctrl+R opens the palette prefilled with the selection; Enter files it and 
     const range = document.createRange(); range.setStart(node, 0); range.setEnd(node, 5);
     const sel = getSelection(); sel.removeAllRanges(); sel.addRange(range); 0`);
   assert.equal(await js(`getSelection().toString()`), 'Hello');
-  await ctrlR();
+  await ctrlD();
   await tick(400);
   assert.deepEqual(await paletteInput(), { value: 'Hello', focused: true, selected: 'Hello' });
   assert.equal(await js(`document.querySelector('#tracker-palette li.active .tp-name')?.textContent`), 'Sword', 'the prefilled query already found a hit');
@@ -186,7 +186,7 @@ test('Ctrl+R opens the palette prefilled with the selection; Enter files it and 
 });
 
 test('Escape closes the palette without posting, selection intact', async () => {
-  await ctrlR();
+  await ctrlD();
   await tick(300);
   assert.equal((await paletteInput())?.value, 'Hello');
   await js(`document.querySelector('#tracker-palette input').dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))`);
