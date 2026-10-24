@@ -133,7 +133,7 @@ The lines upstream files carry for it, to re-apply by hand if a merge ever loses
 | `app.js` | `renderDarlings()`, once `content` is filled | `window.neoHooks?.darlingRendered?.(el, content, d);` |
 | `app.js` | `updateCounters()`, after the `!book` guard | `window.neoHooks?.countersUpdated?.();` |
 
-The bridge installs `window.neoHooks` at the bottom of `tracker-bridge.js`, where each hook is documented; without the bridge every hook is a no-op. `npm run test:tracker` drives the pane's mode switching end to end — run it (and `npm test`, `npm run lint`) after every upstream merge.
+The bridge installs `window.neoHooks` at the bottom of `tracker-bridge.js`, where each hook is documented; without the bridge every hook is a no-op. It also owns the fork's one shortcut, **Ctrl+K / ⌘K**, which opens the drawer and puts the cursor in the tracker's search box. `npm run test:tracker` drives the pane's mode switching end to end — run it (and `npm test`, `npm run lint`) after every upstream merge.
 
 ## Roadmap (things I'm dreaming up but may never get to):
 

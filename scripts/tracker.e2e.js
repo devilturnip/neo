@@ -145,6 +145,24 @@ test('leaving the Manuscript tab hides the Stickies button and closes the unpinn
   assert.equal(await hidden(), false);
 });
 
+test('Ctrl+K opens the pane in tracker mode and asks the tracker for its search box', async () => {
+  await js(`document.getElementById('back-to-shelf').dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))`);
+  await tick(100);
+  assert.equal((await paneState()).open, false, 'starts closed');
+  // Record the bridge's posts instead of making them.
+  await js(`window.__posts = []; window.__realFetch = window.fetch; window.fetch = (u) => { window.__posts.push(String(u)); return Promise.resolve({ ok: true, json: async () => ({}) }); }; 0`);
+  await js(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ctrlKey: true, bubbles: true, cancelable: true }))`);
+  await tick(1500);
+  const state = await paneState();
+  assert.equal(state.open, true);
+  assert.equal(state.mode, 'tracker');
+  // Only when a tracker server was found (this suite doesn't require one).
+  if (await js(`!!trackerReadyUrl`)) {
+    assert.ok(await js(`window.__posts.some((u) => u.includes('__neo-intent?type=search'))`), 'the search intent was posted');
+  }
+  await js(`window.fetch = window.__realFetch; 0`);
+});
+
 async function main() {
   await app.whenReady();
   let failed = 0;

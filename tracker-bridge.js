@@ -595,6 +595,24 @@ document.addEventListener('contextmenu', async (e) => {
   await sendTrackerIntent(action, text, owner);
 });
 
+// Ctrl+K / ⌘K from anywhere in NEO: the tracker's search box. Opens the
+// pane (held open past the first mousemove, the way the right-click flow
+// is) and hands the keyboard over through a one-shot intent — the page
+// polls those once a second, so the caret lands within that. Free in
+// upstream NEO; Ctrl+Shift+K is theirs, this isn't.
+document.addEventListener('keydown', (e) => {
+  if (e.defaultPrevented) return;
+  if (!(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey || e.key.toLowerCase() !== 'k') return;
+  e.preventDefault();
+  (async () => {
+    trackerFlowActive = true;
+    await openTrackerPane();
+    if (!trackerReadyUrl) { trackerFlowActive = false; toast(t("The tracker isn't available right now.")); return; }
+    await sendTrackerIntent('search', '');
+    trackerFrame?.contentWindow?.focus();
+  })();
+});
+
 /* ================================================================== */
 /*  The hooks app.js calls                                              */
 /* ================================================================== */
